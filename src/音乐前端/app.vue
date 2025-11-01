@@ -264,6 +264,7 @@ function waitForGlobalObject(objectName: string, timeoutMs: number): Promise<any
 }
 
 onMounted(() => {
+  console.log('播放器前端已挂载。检查 onLongPress:', onLongPress); // <--- 在这里加入探针
   (async () => {
     try {
       log('开始初始化流程... 界面当前为“隐身”状态。');
