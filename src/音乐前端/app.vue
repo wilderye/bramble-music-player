@@ -99,8 +99,8 @@
 </template>
 
 <script setup lang="ts">
-import { onLongPress } from '@vueuse/core';
 import { onMounted, ref } from 'vue';
+import { onLongPress } from '@vueuse/core';
 
 // --- 状态与引用 ---
 const isPlaylistVisible = ref(false);
