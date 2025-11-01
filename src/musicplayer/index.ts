@@ -2728,10 +2728,10 @@ async function _handleNewAssistantMessage(messageId: number): Promise<void> {
   try {
     const message = getChatMessages(messageId)?.[0];
 
-    if (message?.role === 'assistant' && !message.message.includes('<playmusic/>')) {
+    if (message?.role === 'assistant' && !message.message.includes('<DarkBramblePlayer/>')) {
       logProbe(`[Injector] (探针) 条件满足，立即为 message_id: ${messageId} 执行注入...`);
 
-      await setChatMessages([{ message_id: messageId, message: `${message.message}\n<playmusic/>` }]);
+      await setChatMessages([{ message_id: messageId, message: `${message.message}\n<DarkBramblePlayer/>` }]);
 
       logProbe(`[Injector] (探针) 注入成功。`);
     } else {
