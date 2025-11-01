@@ -449,6 +449,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
         lodash: '_',
         showdown: 'showdown',
         toastr: 'toastr',
+        vue: 'Vue',
         'vue-router': 'VueRouter',
         yaml: 'YAML',
         zod: 'z',
