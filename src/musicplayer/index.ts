@@ -1,4 +1,4 @@
-console.log('音乐播放器脚本 V-DarkBramblePlayer 确认加载！');
+console.log('音乐播放器脚本 V-DarkBramblePlayer 11.2版本！');
 
 // =================================================================
 // 0. 诊断工具 (Diagnostic Tools)
