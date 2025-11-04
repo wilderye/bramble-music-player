@@ -437,7 +437,11 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
         return callback();
       }
 
+<<<<<<< HEAD
       const builtin = ['vue3-pixi', 'vue-demi', '@vueuse/core'];
+=======
+      const builtin = ['vue3-pixi', 'vue-demi'];
+>>>>>>> 8d88568a324a98f36d542d253ca61d6f5e5ee4a3
       if (builtin.includes(request)) {
         return callback();
       }
