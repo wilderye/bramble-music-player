@@ -2873,11 +2873,11 @@ $(() => {
       logProbe('【观察者模型】初始化超时！', 'error');
 
       if (_initializationPromiseControls) {
-        _initializationPromiseControls.reject('Initialization timed out after 5 seconds.');
+        _initializationPromiseControls.reject('Initialization timed out after 10 seconds.');
         _initializationPromiseControls = null;
       }
     }
-  }, 5000);
+  }, 10000);
 
   $(window).on('pagehide', () => {
     logProbe('PAGEHIDE 事件触发！', 'warn');

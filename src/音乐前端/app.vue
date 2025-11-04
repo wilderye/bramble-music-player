@@ -268,7 +268,7 @@ onMounted(() => {
   (async () => {
     try {
       log('开始初始化流程... 界面当前为“隐身”状态。');
-      const api: MusicPlayerAPI = await waitForGlobalObject('musicPlayerAPI', 5000);
+      const api: MusicPlayerAPI = await waitForGlobalObject('musicPlayerAPI', 10000);
       log('后台脚本API "musicPlayerAPI" 已就绪。');
       await api.requestInitialization();
       log('后台初始化请求已成功完成。');
