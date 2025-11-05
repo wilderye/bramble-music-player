@@ -99,8 +99,8 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
 import { onLongPress } from '@vueuse/core';
+import { onMounted, ref } from 'vue';
 
 // --- 状态与引用 ---
 const isPlaylistVisible = ref(false);
@@ -290,11 +290,12 @@ onMounted(() => {
 </script>
 
 <style scoped>
-/* [修改点] V9.1 - 新增的根节点样式 */
 .player-root {
-  position: relative; /* 为音量条提供绝对定位的上下文 */
-  width: 300px; /* 固定宽度，以便 margin 计算 */
-  margin-left: auto; /* 核心：将整个组件推到右侧 */
+  position: relative;
+  width: 100%;
+  max-width: 300px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 /* 1. 根容器与核心布局 */
