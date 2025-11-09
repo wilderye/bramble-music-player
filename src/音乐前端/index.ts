@@ -1,4 +1,3 @@
-// @no-ci
 import { createApp } from 'vue';
 import app from './app.vue';
 
