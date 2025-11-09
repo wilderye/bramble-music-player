@@ -257,20 +257,28 @@ function waitForGlobalObject(objectName: string, timeoutMs: number): Promise<any
         resolve(top[objectName]);
       } else if (Date.now() - startTime > timeoutMs) {
         clearInterval(interval);
-        reject(new Error(`关键API对象 "${objectName}" 在 ${timeoutMs / 1000} 秒内未出现。`));
+        reject(new Error(`连接后台脚本失败。请确认角色卡的脚本开关已打开。若已打开请刷新页面重试。`));
       }
     }, 100);
   });
 }
 
 onMounted(() => {
-  console.log('播放器前端已挂载。检查 onLongPress:', onLongPress); // <--- 在这里加入探针
+  console.log('播放器前端已挂载。检查 onLongPress:', onLongPress);
   (async () => {
     try {
-      log('开始初始化流程... 界面当前为“隐身”状态。');
+      log('开始初始化流程... 界面当前为透明状态。');
       const api: MusicPlayerAPI = await waitForGlobalObject('musicPlayerAPI', 10000);
       log('后台脚本API "musicPlayerAPI" 已就绪。');
-      await api.requestInitialization();
+      await Promise.race([
+        api.requestInitialization(),
+        new Promise((_, reject) =>
+          setTimeout(
+            () => reject(new Error('后台脚本初始化超时。如果这是您第一次加载角色卡，请尝试刷新页面。')),
+            10000,
+          ),
+        ),
+      ]);
       log('后台初始化请求已成功完成。');
       musicPlayerAPI.value = api;
       const initialState = api.getCurrentState();
