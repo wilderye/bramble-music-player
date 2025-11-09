@@ -1,5 +1,5 @@
 // @no-ci
-console.log('音乐播放器脚本8.3.2版本');
+console.log('音乐播放器脚本8.3.4版本');
 
 // =================================================================
 // 0. 诊断工具 (Diagnostic Tools)
@@ -905,7 +905,6 @@ class ListStrategy implements IPlaybackStrategy {
   }
 }
 
-// 用这段代码替换
 class SingleStrategy implements IPlaybackStrategy {
   public onQueueChanged(_currentItem: QueueItem | undefined): void {}
 
@@ -1562,7 +1561,16 @@ async function _findLatestAuthoritativeMvuState(context?: {
  */
 
 async function parseWorldbookConfig() {
-  logProbe('[WorldbookParser V3-聚合模式] 开始解析...', 'group');
+  logProbe('[WorldbookParser V4-健壮模式] 开始解析...', 'group');
+
+  // [修改点] 自定义错误类，用于清晰地区分“配置缺失”和“未知错误”
+  // 这让我们的错误处理逻辑更符合 SRP 原则
+  class ConfigMissingError extends Error {
+    constructor(message: string) {
+      super(message);
+      this.name = 'ConfigMissingError';
+    }
+  }
 
   type AggregatedPlaylist = z.infer<typeof ZodPlaylistConfig> & { _sourceFile: string };
   type AggregatedTrigger = z.infer<typeof ZodTriggerConfig> & { _sourceFile: string };
@@ -1580,53 +1588,57 @@ async function parseWorldbookConfig() {
   };
 
   try {
+    // 前置检查：在执行任何复杂逻辑前，首先确认世界书数据是否可访问。
     const worldbookNames = getCharWorldbookNames('current');
     const searchOrder = [worldbookNames.primary, ...worldbookNames.additional].filter(Boolean);
-    let foundAnyConfig = false;
+
+    // 如果角色卡没有关联任何世界书，直接抛出我们自定义的错误
+    if (searchOrder.length === 0) {
+      throw new ConfigMissingError('角色卡未关联任何世界书。');
+    }
+
+    let foundAnyConfigEntry = false;
 
     for (const bookName of searchOrder) {
       if (!bookName) continue;
       const entries = await getWorldbook(bookName);
-      // [新] 查找所有名字包含 `[MusicConfig]` 的条目，而非精确匹配
       const configEntries = entries.filter(e => e.name.includes('[MusicConfig]'));
 
-      if (configEntries.length > 0) foundAnyConfig = true;
+      if (configEntries.length > 0) {
+        foundAnyConfigEntry = true;
+      }
 
       for (const entry of configEntries) {
-        logProbe(`[Parser V3] 发现并处理配置文件: "${entry.name}"`);
+        logProbe(`[Parser V4] 发现并处理配置文件: "${entry.name}"`);
         try {
           const rawConfig = YAML.parse(entry.content);
           const validationResult = ZodWorldbookConfig.safeParse(rawConfig);
 
           if (!validationResult.success) {
-            logProbe(`[Parser V3] 条目 "${entry.name}" Zod验证失败，已跳过。`, 'error');
+            logProbe(`[Parser V4] 条目 "${entry.name}" Zod验证失败，已跳过。`, 'error');
             _formatZodErrorForToastr(validationResult.error);
-            continue; // 跳过这个错误的文件，继续处理下一个
+            continue;
           }
 
           const data = validationResult.data;
 
-          // --- 合并策略执行 ---
-          // [新] 为每个歌单和触发器附加来源信息，用于后续的精确错误报告
           if (data.playlists) {
             aggregatedConfig.playlists.push(...data.playlists.map(p => ({ ...p, _sourceFile: entry.name })));
           }
           if (data.triggers) {
             aggregatedConfig.triggers.push(...data.triggers.map(t => ({ ...t, _sourceFile: entry.name })));
           }
-
-          // [新] 执行“覆盖并警告”策略
           if (data.default_playlist_id) {
             if (aggregatedConfig.defaultPlaylistId && aggregatedConfig.defaultPlaylistId !== data.default_playlist_id) {
               const warningMsg = `在文件 "${entry.name}" 中发现的 default_playlist_id ("${data.default_playlist_id}") 覆盖了来自文件 "${aggregatedConfig._defaultPlaylistIdSourceFile ?? '未知'}" 的定义 ("${aggregatedConfig.defaultPlaylistId}")。为确保行为可预测，建议只保留一个定义。`;
-              logProbe(`[Parser V3] ${warningMsg}`, 'warn');
+              logProbe(`[Parser V4] ${warningMsg}`, 'warn');
               toastr.warning(warningMsg, '配置警告', { timeOut: 20000, closeButton: true });
             }
             aggregatedConfig.defaultPlaylistId = data.default_playlist_id;
             aggregatedConfig._defaultPlaylistIdSourceFile = entry.name;
           }
         } catch (e: any) {
-          logProbe(`[Parser V3] 解析条目 "${entry.name}" 时发生YAML语法错误: ${e.message}`, 'error');
+          logProbe(`[Parser V4] 解析条目 "${entry.name}" 时发生YAML语法错误: ${e.message}`, 'error');
           toastr.error(`[MusicConfig] 文件 "${entry.name}" 格式错误：YAML 语法不正确。`, '配置错误', {
             timeOut: 10000,
           });
@@ -1634,17 +1646,14 @@ async function parseWorldbookConfig() {
       }
     }
 
-    if (!foundAnyConfig) {
-      logProbe('[Parser V3] 未在任何世界书中找到 [MusicConfig] 条目。', 'warn');
-      logProbe('', 'groupEnd');
-      return null; // 正常结束，只是没有配置
+    // 在所有文件都检查完之后，再判断是否找到了任何 [MusicConfig] 条目
+    if (!foundAnyConfigEntry) {
+      throw new ConfigMissingError('在已关联的世界书中，未找到任何包含 [MusicConfig] 的条目。');
     }
 
-    // --- [新] 最终的、全局的健全性检查 ---
-    logProbe('[Parser V3] 所有文件聚合完毕，开始执行全局健全性检查...', 'groupCollapsed');
+    // --- 全局健全性检查 (逻辑保持不变) ---
+    logProbe('[Parser V4] 所有文件聚合完毕，开始执行全局健全性检查...', 'groupCollapsed');
     let isGloballyValid = true;
-
-    // 1. 全局歌单ID唯一性检查
     const playlistsById = _.groupBy(aggregatedConfig.playlists, 'id');
     for (const id in playlistsById) {
       if (playlistsById[id].length > 1) {
@@ -1655,18 +1664,13 @@ async function parseWorldbookConfig() {
         isGloballyValid = false;
       }
     }
-
     const allPlaylistIds = new Set(aggregatedConfig.playlists.map(p => p.id));
-
-    // 2. 全局 default_playlist_id 有效性检查
     if (aggregatedConfig.defaultPlaylistId && !allPlaylistIds.has(aggregatedConfig.defaultPlaylistId)) {
       const errorMsg = `[MusicConfig] 配置错误: 最终的 default_playlist_id ("${aggregatedConfig.defaultPlaylistId}", 来自文件 "${aggregatedConfig._defaultPlaylistIdSourceFile ?? '未知'}") 指向了一个不存在的歌单。`;
       logProbe(errorMsg, 'error');
       toastr.error(errorMsg, '配置错误', { timeOut: 15000 });
-      aggregatedConfig.defaultPlaylistId = undefined; // 优雅降级
+      aggregatedConfig.defaultPlaylistId = undefined;
     }
-
-    // 3. 全局触发器目标有效性检查
     const finalTriggers = aggregatedConfig.triggers.filter(trigger => {
       if (allPlaylistIds.has(trigger.playlist_id)) {
         return true;
@@ -1678,20 +1682,16 @@ async function parseWorldbookConfig() {
     });
 
     if (!isGloballyValid) {
-      logProbe('[Parser V3] 全局健全性检查失败，配置被拒绝。', 'error');
+      logProbe('[Parser V4] 全局健全性检查失败，配置被拒绝。', 'error');
       logProbe('', 'groupEnd');
       logProbe('', 'groupEnd');
       return null;
     }
-    logProbe('[Parser V3] 全局健全性检查通过。');
+    logProbe('[Parser V4] 全局健全性检查通过。');
     logProbe('', 'groupEnd');
 
     if (aggregatedConfig.playlists.length === 0) {
-      const errorMsg = `[MusicConfig] 致命错误: 所有配置文件中都未能找到任何有效的歌单 (playlists)。播放器无法加载。`;
-      logProbe(errorMsg, 'error');
-      toastr.error(errorMsg, '配置错误', { timeOut: 15000 });
-      logProbe('', 'groupEnd');
-      return null;
+      throw new ConfigMissingError('所有配置文件中都未能找到任何有效的歌单 (playlists)。');
     }
 
     // --- 数据归一化并返回 ---
@@ -1716,12 +1716,34 @@ async function parseWorldbookConfig() {
       triggers: finalTriggers.map(t => _.omit(t, '_sourceFile')),
     };
 
-    logProbe('[Parser V3] 数据归一化完成，运行时配置已就绪。', 'log');
+    logProbe('[Parser V4] 数据归一化完成，运行时配置已就绪。', 'log');
     logProbe('', 'groupEnd');
     return finalConfig;
   } catch (error) {
-    logProbe(`[Parser V3] 解析过程中发生意外顶层错误: ${error}`, 'error');
-    toastr.error('音乐配置加载时发生未知错误，请检查控制台日志。');
+    // 这是新的、更智能的错误处理中心
+    if (error instanceof ConfigMissingError) {
+      // 判断这个错误是不是我们自己抛出的“配置缺失”错误
+      logProbe(`[Parser V4] 捕获到可预见的配置错误: ${error.message}`, 'error');
+
+      // [核心修改] 直接使用 error.message 作为 toastr 的提示内容
+      // 这确保了我们抛出的具体错误信息能够直接呈现给用户
+      toastr.error(error.message, '[音乐播放器] 配置缺失', {
+        timeOut: 20000,
+        closeButton: true,
+      });
+    } else {
+      // 如果是其他所有无法预料的错误，比如酒馆环境问题
+      logProbe(`[Parser V4] 解析过程中发生意外顶层错误: ${error}`, 'error');
+      // 显示通用的、建议用户刷新的提示
+      toastr.error(
+        '播放器在加载设置时遇到一个临时问题。这通常可以通过按 F5 刷新酒馆页面来解决。',
+        '[音乐播放器] 加载时遇到临时问题',
+        {
+          timeOut: 20000,
+          closeButton: true,
+        },
+      );
+    }
     logProbe('', 'groupEnd');
     return null;
   }
