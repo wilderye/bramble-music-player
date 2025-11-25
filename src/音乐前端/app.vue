@@ -100,7 +100,7 @@
 
 <script setup lang="ts">
 import { onLongPress } from '@vueuse/core';
-import { onMounted, ref } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
 
 // --- 状态与引用 ---
 const isPlaylistVisible = ref(false);
@@ -135,11 +135,12 @@ interface MusicPlayerAPI {
   seekTo: (percentage: number) => void;
   setPlaybackMode: (mode: PlaybackMode) => void;
   getCurrentState: () => FullStatePayload;
-  onFullStateUpdate: (callback: (payload: FullStatePayload) => void) => void;
-  onTimeUpdate: (callback: (payload: TimeUpdatePayload) => void) => void;
+  onFullStateUpdate: (callback: (payload: FullStatePayload) => void) => () => void;
+  onTimeUpdate: (callback: (payload: TimeUpdatePayload) => void) => () => void;
 }
 
 const musicPlayerAPI = ref<MusicPlayerAPI | null>(null);
+let unregisterStateListener: (() => void) | null = null;
 const initializationError = ref<string | null>(null);
 const isReadyToShow = ref(false);
 const isPlaying = ref(false);
@@ -246,6 +247,13 @@ const startVolumeDrag = (event: MouseEvent) => {
   document.addEventListener('mouseup', endVolumeDrag, { once: true });
 };
 
+onUnmounted(() => {
+  if (unregisterStateListener) {
+    unregisterStateListener();
+    console.log('[播放器前端] 已注销状态监听器，防止内存泄漏。');
+  }
+});
+
 function waitForGlobalObject(objectName: string, timeoutMs: number): Promise<any> {
   return new Promise((resolve, reject) => {
     const startTime = Date.now();
@@ -283,7 +291,7 @@ onMounted(() => {
       musicPlayerAPI.value = api;
       const initialState = api.getCurrentState();
       updateFullState(initialState);
-      api.onFullStateUpdate(updateFullState);
+      unregisterStateListener = api.onFullStateUpdate(updateFullState);
       log('初始化成功！界面已与后台同步。');
       log('[幕启] 后台状态已同步，即将显示界面。');
       isReadyToShow.value = true;
