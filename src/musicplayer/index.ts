@@ -1,4 +1,4 @@
-console.log('音乐播放器脚本8.3.4版本');
+console.log('音乐播放器脚本9.2.2版本');
 
 // =================================================================
 // 0. 诊断工具 (Diagnostic Tools)
@@ -79,6 +79,7 @@ type PlaybackMode = 'list' | 'single' | 'random';
 type FullStatePayload = {
   currentItem: { title: string; artist?: string; cover?: string } | null;
   isPlaying: boolean;
+  playbackState: 'STOPPED' | 'PLAYING' | 'PAUSED';
   playbackMode: PlaybackMode;
   masterVolume: number;
   playlist: { title: string; artist?: string; cover?: string }[];
@@ -163,6 +164,7 @@ export const ZodWorldbookConfig = z
     default_playlist_id: z.string().optional(),
     playlists: z.array(ZodPlaylistConfig).optional(),
     triggers: z.array(ZodTriggerConfig).optional(),
+    is_mvu: z.boolean().optional(),
   })
   .strict();
 
@@ -180,6 +182,8 @@ export const ZodPersistedState = z.object({
   active_queue: z.array(ZodQueueItemState),
   mode: z.enum(['list', 'single', 'random']).default('list'),
   volume: z.number().min(0).max(1).default(0.5),
+  last_active_swipe_id: z.number().nullable().default(null),
+  finished_base_playlists: z.array(z.string()).default([]),
   previousMvuState: z.record(z.string(), z.any()).optional(),
 });
 
@@ -434,6 +438,109 @@ const MvuManager = (() => {
 })();
 
 // =================================================================
+// 2.X. 文本标签管理器 (The TextTagManager - "The Bard")
+// =================================================================
+/**
+ * 职责 (SRP): 仅负责从历史文本中解析 <scene:xxx> 标签，将其转化为标准化的状态对象。
+ * 它不负责播放，不负责决策，只负责“阅读”和“翻译”。
+ */
+const TextTagManager = (() => {
+  logProbe('[TextTagManager] 模块正在初始化 (吟游诗人引擎)...');
+
+  // 正则表达式：匹配 <scene: id >，允许冒号后有空格，捕获 id 部分
+  // 使用 'g' 标志以便我们在同一条消息中查找最后一个匹配项
+  const SCENE_TAG_REGEX = /<scene:\s*([^>]+)\s*>/g;
+
+  /**
+   * [核心算法] 滑动窗口回溯扫描。
+   * 性能: O(1) - 无论聊天记录多长，最多只拉取最近 20 条。
+   */
+  async function _getLatestState(): Promise<Record<string, any>> {
+    logProbe('[TextTagManager] (Query) 开始执行文本回溯扫描...', 'groupCollapsed');
+
+    try {
+      // 1. 确定锚点
+      const latestMsgs = getChatMessages(-1);
+      if (!latestMsgs || latestMsgs.length === 0) {
+        logProbe('[TextTagManager] 无法获取最新消息锚点，返回空状态。', 'warn');
+        logProbe('', 'groupEnd');
+        return { 'virtual.music_tag': null };
+      }
+
+      const lastId = latestMsgs[0].message_id;
+
+      // 2. 计算窗口 (最近 20 条)
+      const startId = Math.max(0, lastId - 19);
+      const rangeString = `${startId}-${lastId}`;
+      logProbe(`(探针) 扫描窗口确定: ${rangeString} (锚点ID: ${lastId})`);
+
+      // 3. 获取切片
+      const msgs = getChatMessages(rangeString);
+
+      // 4. 倒序遍历
+      for (let i = msgs.length - 1; i >= 0; i--) {
+        const msg = msgs[i];
+
+        // [过滤] 严格忽略用户的输入，防止用户通过发送标签操控 BGM
+        if (msg.role === 'user') {
+          continue;
+        }
+
+        // [解析] 在当前消息中寻找标签
+        // 逻辑: "Last Match Wins" (同一条消息里如果有多个标签，取最后一个)
+        const allMatches = [...msg.message.matchAll(SCENE_TAG_REGEX)];
+
+        if (allMatches.length > 0) {
+          // 取最后一个匹配项
+          const lastMatch = allMatches[allMatches.length - 1];
+          const rawId = lastMatch[1].trim();
+
+          // [归一化] 强制转小写，以匹配隐式生成的触发器
+          // 如果 ID 是 "null" (不分大小写)，则视为明确的“停止/空”指令
+          if (rawId.toLowerCase() === 'null') {
+            logProbe(`[TextTagManager] 在 message_id: ${msg.message_id} 找到明确的空指令 <scene:null>。`);
+            logProbe('', 'groupEnd');
+            return { 'virtual.music_tag': null };
+          }
+
+          const normalizedId = rawId.toLowerCase();
+          logProbe(
+            `[TextTagManager] 命中! 在 message_id: ${msg.message_id} 找到标签: "${rawId}" -> 归一化: "${normalizedId}"`,
+          );
+          logProbe('', 'groupEnd');
+          return { 'virtual.music_tag': normalizedId };
+        }
+
+        // [规则] 遇到第一条 AI 消息，即使没有标签，也必须停止扫描。
+        // "无标签即停止"原则：这意味着场景歌单的生命周期仅维持在有标签的那一楼。
+        // 这种设计避免了为了找一个标签而无限回溯历史。
+        logProbe(
+          `[TextTagManager] 在 message_id: ${msg.message_id} (AI) 中未发现标签。根据“无标签即空”原则，扫描结束。`,
+        );
+        logProbe('', 'groupEnd');
+        return { 'virtual.music_tag': null };
+      }
+
+      // 5. 兜底
+      logProbe('[TextTagManager] 扫描完窗口内所有消息，未发现有效 AI 消息。返回空状态。');
+      logProbe('', 'groupEnd');
+      return { 'virtual.music_tag': null };
+    } catch (error) {
+      logProbe(`[TextTagManager] 扫描过程中发生错误: ${error}`, 'error');
+      logProbe('', 'groupEnd');
+      return { 'virtual.music_tag': null };
+    }
+  }
+
+  const publicAPI = {
+    getLatestState: _getLatestState,
+  };
+
+  logProbe('[TextTagManager] 模块初始化完成。');
+  return publicAPI;
+})();
+
+// =================================================================
 // 2. 状态管理器 (The State Manager) - [V2.0 重构版]
 // =================================================================
 const StateManager = (() => {
@@ -444,10 +551,11 @@ const StateManager = (() => {
   // -------------------
   // [重构] 核心数据结构变更为优先级队列
   let _activePlaylistQueue: QueueItem[] = [];
-
+  let _lastActiveSwipeId: number | null = null;
+  let _finishedBasePlaylists: Set<string> = new Set();
   let _playbackMode: PlaybackMode = 'list';
   let _masterVolume: number = 0.5;
-  let _isPlaying: boolean = false;
+  let _playbackState: 'STOPPED' | 'PLAYING' | 'PAUSED' = 'STOPPED';
   let _isPerformingEffect: boolean = false;
 
   // -------------------
@@ -465,7 +573,9 @@ const StateManager = (() => {
     // --- 基础状态查询 ---
     getPlaybackMode: () => _playbackMode,
     getVolume: () => _masterVolume,
-    isPlaying: () => _isPlaying,
+    // [兼容性] 旧接口，仅当状态明确为 PLAYING 时返回 true
+    isPlaying: () => _playbackState === 'PLAYING',
+    getPlaybackState: () => _playbackState,
     isPerformingEffect: () => _isPerformingEffect,
 
     // --- [重构] 队列核心查询 ---
@@ -486,7 +596,9 @@ const StateManager = (() => {
         active_queue: _activePlaylistQueue,
         mode: _playbackMode,
         volume: _masterVolume,
-        isPlaying: _isPlaying,
+        // [兼容性] 同时提供布尔值和枚举值
+        isPlaying: _playbackState === 'PLAYING',
+        playbackState: _playbackState,
         isPerformingEffect: _isPerformingEffect,
       });
     },
@@ -508,7 +620,8 @@ const StateManager = (() => {
         active_queue: persistentQueue,
         mode: _playbackMode,
         volume: _masterVolume,
-        // previousMvuState 由 MvuManager 单独管理，此处仅返回核心状态
+        last_active_swipe_id: _lastActiveSwipeId,
+        finished_base_playlists: Array.from(_finishedBasePlaylists),
       };
     },
 
@@ -518,8 +631,10 @@ const StateManager = (() => {
       _activePlaylistQueue = [];
       _playbackMode = 'list';
       _masterVolume = 0.5;
-      _isPlaying = false;
+      _playbackState = 'STOPPED';
       _isPerformingEffect = false;
+      _lastActiveSwipeId = null;
+      _finishedBasePlaylists.clear();
     },
 
     loadState(stateToLoad: any) {
@@ -527,6 +642,11 @@ const StateManager = (() => {
       _playbackMode = stateToLoad.mode;
       _masterVolume = stateToLoad.volume;
       _activePlaylistQueue = stateToLoad.active_queue || [];
+      _lastActiveSwipeId = stateToLoad.last_active_swipe_id ?? null;
+      _finishedBasePlaylists = new Set(stateToLoad.finished_base_playlists || []);
+      logProbe(
+        `(探针) 记忆加载完成: 上次SwipeID=${_lastActiveSwipeId}, 已完结基础歌单数=${_finishedBasePlaylists.size}`,
+      );
       logProbe(
         `状态加载完成. 队列深度: ${_activePlaylistQueue.length}, 模式: ${_playbackMode}, 音量: ${_masterVolume}`,
       );
@@ -540,11 +660,32 @@ const StateManager = (() => {
     setVolume: (volume: number) => {
       _masterVolume = volume;
     },
-    setPlaying: (playing: boolean) => {
-      _isPlaying = playing;
+    setPlaybackState: (newState: 'STOPPED' | 'PLAYING' | 'PAUSED') => {
+      // [探针] 状态变更日志，帮助我们追踪每一次状态跳变
+      if (_playbackState !== newState) {
+        logProbe(`[StateManager] 状态流转: ${_playbackState} -> ${newState}`);
+      }
+      _playbackState = newState;
     },
     setPerformingEffect: (isPerforming: boolean) => {
       _isPerformingEffect = isPerforming;
+    },
+
+    getLastActiveSwipeId: () => _lastActiveSwipeId,
+    setLastActiveSwipeId: (id: number | null) => {
+      _lastActiveSwipeId = id;
+    },
+
+    getFinishedBasePlaylists: () => new Set(_finishedBasePlaylists),
+
+    addToFinishedBasePlaylists: (playlistId: string) => {
+      logProbe(`[StateManager]将基础歌单 "${playlistId}" 刻入已完成列表。`);
+      _finishedBasePlaylists.add(playlistId);
+    },
+
+    clearFinishedBasePlaylists: () => {
+      logProbe(`[StateManager]清空记录。`);
+      _finishedBasePlaylists.clear();
     },
 
     // --- [重构] 队列核心操作 ---
@@ -810,12 +951,12 @@ const PlaybackEngine = (() => {
           await playPromise;
         }
 
-        StateManager.setPlaying(true);
+        StateManager.setPlaybackState('PLAYING');
         logProbe('[Engine:HardCut] “瞬击”播放成功。');
       } catch (error) {
         logProbe(`[Engine:HardCut] “瞬击”播放失败! 这通常是因为用户未与页面交互。`, 'error');
 
-        StateManager.setPlaying(false);
+        StateManager.setPlaybackState('STOPPED');
 
         throw error;
       } finally {
@@ -1182,41 +1323,69 @@ let defaultPlaylistId: string | undefined = '';
 
 let isMvuIntegrationActive = false;
 let isCorePlayerInitialized = false;
+let isMvuMode = true;
 let _currentChatId: string | number | null = null;
 
 const fullStateUpdateCallbacks: ((payload: FullStatePayload) => void)[] = [];
 const timeUpdateCallbacks: ((payload: TimeUpdatePayload) => void)[] = [];
 
 /**
- * [V9.0 统一校准官] 新架构的“运行时大脑”。
+ * [V9.5 统一校准官] 新架构的“运行时大脑”。
  * 它的单一职责是：响应“运行时”的增量事件，通过“边沿检测”模型，
  * 精确地、最小化地修改当前队列，并决策是否需要变更播放。
  * @param eventPayload - 可选的、来自 MVU 事件的最新状态数据。
  */
 async function _reconcilePlaylistQueue(eventPayload?: any, options?: { transitionEffect?: 'hard' | 'smooth' }) {
+  if (!isScriptActive) {
+    return;
+  }
   // --- 1. 【前置检查】: 防止并发的事件风暴 ---
   if (isReconciling) {
     logProbe('[Reconciler] 请求被合并：前一个校准任务仍在进行中。', 'warn');
     return;
   }
   isReconciling = true;
-  logProbe('=== [Reconciler] “统一校准官”已接管运行时事件 ===', 'group');
+  logProbe(`=== [Reconciler] “统一校准官”已接管运行时事件 (模式: ${isMvuMode ? 'MVU' : 'Text'}) ===`, 'group');
 
   try {
     StateManager.setPerformingEffect(true);
     logProbe('[Reconciler] (事务) 已上效果锁并广播“过渡中”状态，UI应进入等待。');
     broadcastFullState();
 
-    // --- 核心逻辑 (原有的 try...finally 块) ---
+    // --- 核心逻辑 ---
     try {
       const oldTopItem = StateManager.getTopQueueItem();
 
-      // --- 2. 【获取事实】: 遵循“时序悖论”定律 ---
-      const currentStateData = eventPayload?.stat_data
-        ? eventPayload.stat_data
-        : ((await _findLatestAuthoritativeMvuState())?.mvuData?.stat_data ?? {});
+      // --- 2. 【获取事实 (The Branch)】: 双轨制分流 ---
+      let currentStateData: Record<string, any> = {};
 
-      logProbe(`[Reconciler] (探针) 已确定本次校准的权威 MVU 状态 (来源: ${eventPayload ? '事件载荷' : '主动查询'})。`);
+      if (isMvuMode) {
+        // [路径 A: MVU 模式]
+        if (eventPayload?.stat_data) {
+          // Case 1: 事件推送 (VARIABLE_UPDATE_ENDED)
+          currentStateData = eventPayload.stat_data;
+          logProbe('[Reconciler] (事实) 采用事件载荷提供的 MVU 状态。');
+        } else {
+          // Case 2: 主动查询 (MESSAGE_SWIPED / MESSAGE_DELETED)
+          // 注意：由于我们在事件监听层已经通过 duringGenerating() 过滤了生成中的情况，
+          // 这里获取到的权威状态应该是稳定且可靠的。
+          const authState = await _findLatestAuthoritativeMvuState();
+
+          if (authState) {
+            currentStateData = authState.mvuData?.stat_data ?? {};
+            logProbe('[Reconciler] (事实) 主动查询并采用了最新的 MVU 状态。');
+          } else {
+            // 如果真的找不到任何数据（极罕见），默认为空状态，这意味着触发器可能全部失效
+            logProbe('[Reconciler] (事实) 未找到有效的 MVU 状态，将使用空状态进行校准。', 'warn');
+            currentStateData = {};
+          }
+        }
+      } else {
+        // [路径 B: Text 模式]
+        logProbe('[Reconciler] (事实) 进入 Text 模式状态获取流程...');
+        currentStateData = await TextTagManager.getLatestState();
+        logProbe('[Reconciler] (事实) TextTagManager 已返回标准化状态。');
+      }
 
       // --- 3. 【生成报告】: 委托 MvuManager 进行边沿检测 ---
       const previousStateData = MvuManager.getPreviousState();
@@ -1281,14 +1450,33 @@ async function _reconcilePlaylistQueue(eventPayload?: any, options?: { transitio
             } else {
               await _executeTransition(targetIndex);
             }
+          } else if (
+            oldTopItem === undefined && // 1. 队列发生“从无到有”的跃迁
+            StateManager.getPlaybackState() === 'STOPPED' // 2. 关键：只要不是 PAUSED (用户主动暂停)，就允许场景触发播放
+          ) {
+            logProbe(
+              '[Reconciler] 自动播放契约满足 (Queue 0->1 + Not Paused)，将调用 _executeGenesisPlayInternal。',
+              'warn',
+            );
+            await _executeGenesisPlayInternal(targetIndex);
           } else {
-            logProbe('[Reconciler] (效果) 用户已暂停，仅在后台静默更新轨道，不播放。');
+            logProbe('[Reconciler] (效果) 用户已暂停或未授权，仅在后台静默更新轨道，不播放。');
             const track = newTopItem.playlistContent[targetIndex];
             const activePlayer = PlaybackEngine.getActivePlayer();
             if (track && activePlayer) {
               activePlayer.src = track.url;
             }
           }
+        } else {
+          logProbe('[Reconciler] (决策) 监测到队列已完全清空。正在执行“物理静音”协议...', 'warn');
+
+          await PlaybackEngine.fadeOutAndPause();
+
+          StateManager.setPlaybackState('STOPPED');
+
+          StrategyManager.notifyQueueChanged();
+
+          logProbe('[Reconciler] (执行) “物理静音”完成，播放状态已置为 STOPPED。');
         }
       } else {
         logProbe('[Reconciler] (决策) 队首未发生变更，保持当前播放稳定。');
@@ -1327,13 +1515,14 @@ function broadcastFullState() {
         }
       : null,
     isPlaying: StateManager.isPlaying(),
+    playbackState: StateManager.getPlaybackState(),
     playbackMode: StateManager.getPlaybackMode(),
     masterVolume: StateManager.getVolume(),
     playlist: currentPlaylist.map(item => ({ title: item.歌名, artist: item.歌手, cover: item.封面 })),
     isTransitioning: StateManager.isPerformingEffect(),
   };
   logProbe(
-    `[Broadcast] 正在广播完整状态... isPlaying: ${payload.isPlaying}, mode: ${payload.playbackMode}, currentItem: ${payload.currentItem?.title ?? '无'}`,
+    `[Broadcast] 正在广播完整状态... [旧兼容: isPlaying=${payload.isPlaying}] [新内核: state=${payload.playbackState}] mode: ${payload.playbackMode}, currentItem: ${payload.currentItem?.title ?? '无'}`,
     'groupCollapsed',
   );
   logProbe(`详细: isTransitioning=${payload.isTransitioning}`);
@@ -1579,11 +1768,13 @@ async function parseWorldbookConfig() {
     triggers: AggregatedTrigger[];
     defaultPlaylistId?: string;
     _defaultPlaylistIdSourceFile: string | null;
+    explicitMvuMode?: boolean;
   } = {
     playlists: [],
     triggers: [],
     defaultPlaylistId: undefined,
     _defaultPlaylistIdSourceFile: null,
+    explicitMvuMode: undefined,
   };
 
   try {
@@ -1636,6 +1827,10 @@ async function parseWorldbookConfig() {
             aggregatedConfig.defaultPlaylistId = data.default_playlist_id;
             aggregatedConfig._defaultPlaylistIdSourceFile = entry.name;
           }
+          if (data.is_mvu !== undefined) {
+            aggregatedConfig.explicitMvuMode = data.is_mvu;
+            logProbe(`[Parser V9.5] (配置) 在文件 "${entry.name}" 中读取到显式模式设置: is_mvu = ${data.is_mvu}`);
+          }
         } catch (e: any) {
           logProbe(`[Parser V4] 解析条目 "${entry.name}" 时发生YAML语法错误: ${e.message}`, 'error');
           toastr.error(`[MusicConfig] 文件 "${entry.name}" 格式错误：YAML 语法不正确。`, '配置错误', {
@@ -1648,6 +1843,46 @@ async function parseWorldbookConfig() {
     // 在所有文件都检查完之后，再判断是否找到了任何 [MusicConfig] 条目
     if (!foundAnyConfigEntry) {
       throw new ConfigMissingError('在已关联的世界书中，未找到任何包含 [MusicConfig] 的条目。');
+    }
+
+    // 模式推断与虚拟触发器生成
+    let finalIsMvu = false;
+
+    // 1. 优先级判断: 显式配置 > 自动推断
+    if (aggregatedConfig.explicitMvuMode !== undefined) {
+      finalIsMvu = aggregatedConfig.explicitMvuMode;
+      logProbe(`[Parser V9.5] (决策) 遵循显式配置，运行模式锁定为: ${finalIsMvu ? 'MVU模式' : '纯文字模式'}`);
+    } else {
+      // 2. 自动推断: 有触发器就是 MVU，否则是纯文字
+      finalIsMvu = aggregatedConfig.triggers.length > 0;
+      logProbe(
+        `[Parser V9.5] (决策) 基于内容自动推断，运行模式锁定为: ${finalIsMvu ? 'MVU模式 (发现触发器)' : '纯文字模式 (无触发器)'}`,
+      );
+    }
+
+    // 3. 纯文字模式下的虚拟化处理
+    if (!finalIsMvu) {
+      const uniquePlaylistIds = new Set(aggregatedConfig.playlists.map(p => p.id));
+      logProbe(`[Parser V9.5] (虚拟化) 正在为 ${uniquePlaylistIds.size} 个歌单生成隐式触发器...`);
+
+      for (const pid of uniquePlaylistIds) {
+        const virtualTrigger: AggregatedTrigger = {
+          type: 'mvu_variable',
+          playlist_id: pid,
+          priority: 0,
+          conditions: [
+            {
+              variable_path: 'virtual.music_tag',
+              value: pid.toLowerCase(),
+            },
+          ],
+          _sourceFile: 'System_Auto_Generated',
+        };
+        aggregatedConfig.triggers.push(virtualTrigger);
+      }
+      logProbe(
+        `[Parser V9.5] (虚拟化) 生成完成。系统现在可以识别 <scene:${Array.from(uniquePlaylistIds)[0]}...> 等标签。`,
+      );
     }
 
     // --- 全局健全性检查 (逻辑保持不变) ---
@@ -1713,6 +1948,7 @@ async function parseWorldbookConfig() {
       playlists: playlistsAsMap,
       defaultId: aggregatedConfig.defaultPlaylistId,
       triggers: finalTriggers.map(t => _.omit(t, '_sourceFile')),
+      isMvu: finalIsMvu,
     };
 
     logProbe('[Parser V4] 数据归一化完成，运行时配置已就绪。', 'log');
@@ -1803,7 +2039,7 @@ function createQueueItem(config: CreateQueueItemConfig): QueueItem | null {
       ...baseItem,
       priority: -Infinity,
       triggeredBy: 'base',
-      onFinishRule: 'loop',
+      onFinishRule: playlistConfig.onFinishRule ?? 'loop',
     };
   } else {
     return {
@@ -1829,7 +2065,15 @@ async function initializePlayerForChat(
   try {
     // --- 【准备阶段】 清理与重置 ---
     isCorePlayerInitialized = true;
+    // 注意：StateReset 会重置内存，所以我们需要先读档，再根据读档结果恢复必要的记忆
+    const savedState = readState();
     StateManager.resetState();
+
+    if (savedState) {
+      // 恢复基础状态（此时 active_queue 还是空的，将在后面重建）
+      StateManager.loadState(savedState);
+    }
+
     MvuManager.resetState();
     MvuManager.initialize();
     const activePlayer = PlaybackEngine.getActivePlayer();
@@ -1841,7 +2085,6 @@ async function initializePlayerForChat(
     if (!config) {
       logProbe('[Initializer] 配置无效，初始化中止。', 'error');
       broadcastFullState();
-      // [新增] 如果配置在解析阶段就失败了，我们必须在这里抛出错误以通知前端
       throw new Error('世界书音乐配置解析失败，请检查配置。');
     }
 
@@ -1849,7 +2092,9 @@ async function initializePlayerForChat(
     defaultPlaylistId = config.defaultId;
     triggers = config.triggers;
 
-    const savedState = readState();
+    isMvuMode = config.isMvu;
+    logProbe(`[Initializer] 全局运行模式已固化: ${isMvuMode ? 'MVU 交响乐模式' : '纯文字 吟游诗人模式'}`);
+
     const currentStatData = authoritativeState?.mvuData?.stat_data ?? null;
     const authoritativeMessageId = authoritativeState?.messageId;
 
@@ -1857,13 +2102,15 @@ async function initializePlayerForChat(
 
     // --- 【第一步】 确定并验证权威的基础歌单 ID ---
     let correctBasePlaylistId = defaultPlaylistId;
+
     const msgZero = getChatMessages(0, { include_swipes: true })[0];
+    const currentSwipeId = msgZero?.swipe_id ?? 0;
+
     if (msgZero) {
       const currentGreeting = msgZero.swipes?.[msgZero.swipe_id];
       const tagMatch = currentGreeting?.match(/<playlist:([^>]+)>/);
       if (tagMatch && tagMatch[1]) {
         const tagPlaylistId = tagMatch[1];
-        // [新增] 检查 3: 开场白标签中的歌单是否存在
         if (allPlaylists[tagPlaylistId]) {
           logProbe(`[Initializer-Heal] (基准) 从开场白标签确定权威基础歌单: "${tagPlaylistId}"`);
           correctBasePlaylistId = tagPlaylistId;
@@ -1871,29 +2118,42 @@ async function initializePlayerForChat(
           const errorMsg = `[MusicConfig] 配置警告: 开场白标签 <playlist:${tagPlaylistId}> 指向了一个不存在的歌单ID。将回退至默认歌单。`;
           logProbe(errorMsg, 'warn');
           toastr.warning(errorMsg, '配置警告', { timeOut: 15000 });
-          // 保持 correctBasePlaylistId 为 defaultPlaylistId
         }
       } else {
         logProbe(`[Initializer-Heal] (基准) 开场白无标签，使用世界书默认歌单: "${defaultPlaylistId ?? '无'}"`);
       }
     }
 
-    // [新增] 检查 4: 基础歌单与场景歌单冲突检查
-    if (correctBasePlaylistId) {
+    const lastSwipeId = StateManager.getLastActiveSwipeId();
+
+    if (lastSwipeId !== null && lastSwipeId !== currentSwipeId) {
+      logProbe(`[Initializer] (上下文切换) 检测到平行宇宙跃迁: Swipe ${lastSwipeId} -> ${currentSwipeId}。`, 'warn');
+      logProbe(`[Initializer] (决策) 旧时间线的墓志铭已失效，正在清空...`);
+      StateManager.clearFinishedBasePlaylists();
+    } else {
+      logProbe(`[Initializer] (上下文保持) 同一时间线 (Swipe ${currentSwipeId})，保持墓志铭记录。`);
+    }
+    // 更新当前锚点
+    StateManager.setLastActiveSwipeId(currentSwipeId);
+
+    // 检查 4: 基础歌单与场景歌单冲突检查
+    if (config.isMvu && correctBasePlaylistId) {
       const scenePlaylistIds = new Set(triggers.map(t => t.playlist_id));
       if (scenePlaylistIds.has(correctBasePlaylistId)) {
         const fatalErrorMsg = `[MusicConfig] 致命配置错误: 歌单 "${correctBasePlaylistId}" 不能同时被用作基础歌单（在开场白或默认设置中）和场景歌单（被触发器关联）。请为它们使用不同的歌单。`;
         logProbe(fatalErrorMsg, 'error');
         toastr.error(fatalErrorMsg, '配置冲突', { timeOut: 20000, closeButton: true });
-        // 这是无法解决的逻辑冲突，必须中止初始化
         throw new Error('基础歌单与场景歌单存在致命冲突。');
       }
+    } else if (!config.isMvu && correctBasePlaylistId) {
+      logProbe(`[Initializer] (冲突豁免) 纯文字模式下，跳过基础/场景歌单重名检查。`);
     }
 
     // --- 【第二步】 队列净化与重建 (Heal the Past) ---
     if (savedState) {
       logProbe('[Initializer-Heal] (净化) 开始审查存档...', 'groupCollapsed');
       const healedQueue: QueueItem[] = [];
+      // 注意：此时我们使用的是 savedState.active_queue，而不是 StateManager 中的（因为 resetState 会清空）
       for (const persistedItem of savedState.active_queue) {
         if (!Object.prototype.hasOwnProperty.call(allPlaylists, persistedItem.playlistId)) {
           logProbe(`(净化-丢弃) 存档歌单 "${persistedItem.playlistId}" 已不存在。`, 'warn');
@@ -1918,7 +2178,7 @@ async function initializePlayerForChat(
           logProbe(`(探针-净化) 正在审查存档的MVU歌单 "${persistedItem.playlistId}"...`);
 
           if (playlistConfig.onFinishRule === 'pop') {
-            logProbe(`(净化-丢弃) 原因：规则为 'pop'。`);
+            logProbe(`(净化-丢弃) 原因：规则为 'pop' (场景歌单不应跨会话保留)。`);
             continue;
           }
 
@@ -1928,7 +2188,7 @@ async function initializePlayerForChat(
           }
 
           if (!MvuManager.checkTriggerCondition(currentTrigger, currentStatData)) {
-            logProbe(`(净化-丢-弃) 原因：最新的触发器条件在当前状态下不满足。`);
+            logProbe(`(净化-丢弃) 原因：最新的触发器条件在当前状态下不满足。`);
             continue;
           }
 
@@ -1970,27 +2230,37 @@ async function initializePlayerForChat(
       logProbe('[Initializer-Heal] (补充) 检查完成。', 'groupEnd');
     }
 
-    // --- 【第四步】 基础歌单最终注入 (Final Guarantee) ---
+    // --- 【第四步】 基础歌单最终注入 (Final Guarantee V2.0) ---
     const basePlaylistExists = finalQueue.some(item => item.triggeredBy === 'base');
     if (!basePlaylistExists && correctBasePlaylistId && allPlaylists[correctBasePlaylistId]) {
-      logProbe(`[Initializer-Heal] (注入) 最终注入权威基础歌单 "${correctBasePlaylistId}"。`);
-      const baseItem = createQueueItem({ type: 'base', playlistId: correctBasePlaylistId });
-      if (baseItem) finalQueue.push(baseItem);
+      const isDead = StateManager.getFinishedBasePlaylists().has(correctBasePlaylistId);
+
+      if (isDead) {
+        logProbe(
+          `[Initializer-Heal] (注入-阻止) 基础歌单 "${correctBasePlaylistId}" 在此上下文(Swipe ${currentSwipeId})中已完结(墓志铭在册)。尊重历史，拒绝复活。`,
+        );
+      } else {
+        logProbe(`[Initializer-Heal] (注入) 最终注入权威基础歌单 "${correctBasePlaylistId}"。`);
+        const baseItem = createQueueItem({ type: 'base', playlistId: correctBasePlaylistId });
+        if (baseItem) finalQueue.push(baseItem);
+      }
     }
 
     // --- 【第五步】 最终加载与后续设置 ---
     logProbe('[Initializer-Finalize] 正在提交最终队列并完成设置...');
     StateManager.updateQueue(finalQueue);
 
-    const mode = savedState?.mode ?? 'list';
-    StateManager.setPlaybackMode(mode);
+    // 注意：如果 resetState 重置了模式，我们需要从 savedState 恢复，或者使用默认
+    // 之前的代码是在 resetState 后直接覆盖，但这里我们利用 loadState 已经恢复了一部分
+    // 我们需要确保 StrategyManager 同步
+    const mode = StateManager.getPlaybackMode();
     StrategyManager.setMode(mode);
     logProbe(`(探针) 策略模式已同步为: ${mode}`);
     StrategyManager.notifyQueueChanged();
 
     PlaybackEngine.initialize();
-    const volume = savedState?.volume ?? 0.5;
-    StateManager.setVolume(volume);
+
+    const volume = StateManager.getVolume();
     if (PlaybackEngine.getActivePlayer()) PlaybackEngine.getActivePlayer()!.volume = volume;
     if (PlaybackEngine.getStandbyPlayer()) PlaybackEngine.getStandbyPlayer()!.volume = 0;
 
@@ -2000,6 +2270,8 @@ async function initializePlayerForChat(
       if (track && PlaybackEngine.getActivePlayer()) {
         PlaybackEngine.getActivePlayer()!.src = track.url;
       }
+    } else {
+      logProbe(`[Initializer] (探针) 最终队列为空（可能因基础歌单已完结），不执行音频预加载。`);
     }
 
     if (currentStatData) {
@@ -2026,7 +2298,6 @@ async function initializePlayerForChat(
   } catch (error) {
     logProbe(`[Initializer] 核心初始化过程中发生严重错误: ${error}`, 'error');
     console.error(error);
-    // 将错误继续向上抛出，以便 tryInitialize 中的 catch 块可以捕获它并通知前端
     throw error;
   } finally {
     logProbe('=== 【核心·自愈式初始化】执行完毕 ===', 'groupEnd');
@@ -2059,7 +2330,7 @@ async function _executeTransition(targetIndex: number): Promise<void> {
   try {
     await PlaybackEngine.transitionToTrack(targetTrack.url, StateManager.getVolume());
 
-    StateManager.setPlaying(true);
+    StateManager.setPlaybackState('PLAYING');
     prepareNextTrack();
     logProbe(`[Executor] 索引 ${targetIndex} 播放成功。`);
   } catch (error) {
@@ -2096,7 +2367,7 @@ async function _executeSelfHealingLoop(): Promise<void> {
       if (currentItemForThreshold) {
         toastr.error(`歌单《${currentItemForThreshold.playlistId}》中所有歌曲均无法加载，播放已停止。`);
       }
-      StateManager.setPlaying(false);
+      StateManager.setPlaybackState('STOPPED');
       broadcastFullState();
       return;
     }
@@ -2104,7 +2375,7 @@ async function _executeSelfHealingLoop(): Promise<void> {
     const currentItem = StateManager.getTopQueueItem();
     if (!currentItem) {
       logProbe('[SelfHeal] 自愈中止：中途队列变空。', 'warn');
-      StateManager.setPlaying(false);
+      StateManager.setPlaybackState('STOPPED');
       broadcastFullState();
       return;
     }
@@ -2125,7 +2396,7 @@ async function _executeSelfHealingLoop(): Promise<void> {
     // 防御性编程：确保 targetIndex 存在
     if (typeof directive.targetIndex !== 'number') {
       logProbe('[SelfHeal] 决策应用后需要播放，但没有有效的 targetIndex。自愈中止。', 'error');
-      StateManager.setPlaying(false);
+      StateManager.setPlaybackState('STOPPED');
       broadcastFullState();
       return;
     }
@@ -2188,7 +2459,12 @@ async function _applyNavigationDecision(
     }
 
     case 'RemoveTopAndAdvance': {
-      logProbe('[CentralCommand] 指令: RemoveTopAndAdvance。正在执行【自洽式】队列修改与过渡...'); // [修改] 日志内容
+      logProbe('[CentralCommand] 指令: RemoveTopAndAdvance。正在执行【自洽式】队列修改与过渡...');
+      const itemToRemove = StateManager.getTopQueueItem();
+      if (itemToRemove && itemToRemove.triggeredBy === 'base' && itemToRemove.onFinishRule === 'pop') {
+        logProbe(`[CentralCommand] (死亡登记) 基础歌单 "${itemToRemove.playlistId}" 即将离场`, 'warn');
+        StateManager.addToFinishedBasePlaylists(itemToRemove.playlistId);
+      }
       const currentQueue = StateManager.getQueue();
 
       const poppedItem = currentQueue.shift();
@@ -2206,7 +2482,9 @@ async function _applyNavigationDecision(
         targetIndex = newTopItem.currentIndex;
       } else {
         logProbe('(决策) 队列已空，停止播放。');
-        StateManager.setPlaying(false);
+        logProbe('[CentralCommand] (修复) 检测到队列清空，正在下达物理静音指令...');
+        await PlaybackEngine.fadeOutAndPause();
+        StateManager.setPlaybackState('STOPPED');
         needsAsyncEffect = false;
       }
 
@@ -2239,7 +2517,7 @@ async function _applyNavigationDecision(
 
     case 'Stop': {
       logProbe('[CentralCommand] 指令: Stop。停止播放。');
-      StateManager.setPlaying(false);
+      StateManager.setPlaybackState('STOPPED');
       break;
     }
 
@@ -2362,6 +2640,17 @@ async function _handleNavigation(direction: 'next' | 'prev') {
   }
 }
 
+/**
+ * [内部核心] 执行创世播放的实际逻辑。
+ * 注意：此函数不检查也不设置效果锁，调用者必须确保已持有锁。
+ */
+async function _executeGenesisPlayInternal(targetIndex: number) {
+  logProbe(`[Internal:Genesis] (动作) 执行内部创世播放逻辑 (目标索引: ${targetIndex})...`);
+  StateManager.setPlaybackState('PLAYING');
+  broadcastFullState();
+  await _executeTransition(targetIndex);
+}
+
 async function _handleGenesisPlay() {
   if (StateManager.isPerformingEffect()) {
     logProbe('[Controller:Genesis] 请求被拒绝，因为效果正在执行。', 'warn');
@@ -2378,14 +2667,10 @@ async function _handleGenesisPlay() {
     StateManager.setPerformingEffect(true);
     logProbe(`[Controller:Genesis] === “创世播放”效果开始 (目标索引: ${currentItem.currentIndex}) ===`, 'group');
 
-    StateManager.setPlaying(true);
-
-    broadcastFullState();
-
-    await _executeTransition(currentItem.currentIndex);
+    await _executeGenesisPlayInternal(currentItem.currentIndex);
   } catch (error) {
     logProbe(`[Controller:Genesis] “创世播放”效果执行时发生意外顶层错误: ${error}`, 'error');
-    StateManager.setPlaying(false);
+    StateManager.setPlaybackState('STOPPED');
     broadcastFullState();
   } finally {
     await _releaseEffectLock();
@@ -2434,12 +2719,16 @@ async function _handlePlayIndex(index: number) {
 }
 
 async function togglePlayPause() {
-  logProbe('[Controller:Toggle] === 开始处理播放/暂停切换事件 ===', 'group');
+  logProbe('[Controller:Toggle] === 开始处理播放/暂停切换事件 (三态机版) ===', 'group');
+
+  // 1. 效果锁检查
   if (StateManager.isPerformingEffect()) {
     logProbe('[Controller:Toggle] 请求被拒绝，因为效果正在执行。', 'warn');
     logProbe('', 'groupEnd');
     return;
   }
+
+  // 2. 空队列检查
   const currentItem = StateManager.getTopQueueItem();
   if (!currentItem) {
     logProbe('[Controller:Toggle] 请求中止：播放列表为空。');
@@ -2449,40 +2738,42 @@ async function togglePlayPause() {
   }
 
   try {
+    // 3. 上锁并广播
     StateManager.setPerformingEffect(true);
     broadcastFullState();
 
-    let decision: { action: 'pause' | 'resume' | 'playNew'; targetIndex?: number };
-    const activePlayer = PlaybackEngine.getActivePlayer();
-    const logicalIndex = currentItem.currentIndex;
-    const physicalSrc = activePlayer?.src;
-    const logicalSrc = currentItem.playlistContent[logicalIndex]?.url;
+    const currentState = StateManager.getPlaybackState();
+    logProbe(`[Controller:Toggle] 当前状态: ${currentState}`);
 
-    if (StateManager.isPlaying()) {
-      decision = { action: 'pause' };
-    } else if (activePlayer && physicalSrc === logicalSrc && activePlayer.currentTime > 0) {
-      decision = { action: 'resume' };
-    } else {
-      decision = { action: 'playNew', targetIndex: logicalIndex };
-    }
+    switch (currentState) {
+      case 'STOPPED': {
+        // [核心] 这是首次播放意图的关键点
+        logProbe('[Controller:Toggle] 决策: STOPPED -> PLAYING (视为创世播放)');
 
-    if (decision.action !== 'pause') StateManager.setPlaying(true);
-    else StateManager.setPlaying(false);
+        StateManager.setPlaybackState('PLAYING');
+        broadcastFullState();
 
-    broadcastFullState();
+        // 尝试播放当前队首
+        // 如果是刚加载的歌单，currentIndex 应该是 0，或者是记忆中的位置
+        await _executeTransition(currentItem.currentIndex);
+        break;
+      }
 
-    switch (decision.action) {
-      case 'pause':
+      case 'PLAYING': {
+        logProbe('[Controller:Toggle] 决策: PLAYING -> PAUSED');
+        StateManager.setPlaybackState('PAUSED');
+        broadcastFullState();
         await PlaybackEngine.fadeOutAndPause();
         break;
-      case 'resume':
+      }
+
+      case 'PAUSED': {
+        logProbe('[Controller:Toggle] 决策: PAUSED -> PLAYING (恢复)');
+        StateManager.setPlaybackState('PLAYING');
+        broadcastFullState();
         await PlaybackEngine.resumeAndFadeIn(StateManager.getVolume());
         break;
-      case 'playNew':
-        if (typeof decision.targetIndex === 'number') {
-          await _executeTransition(decision.targetIndex);
-        }
-        break;
+      }
     }
   } catch (error) {
     logProbe(`[Controller:Toggle] 在执行效果时捕获到错误，将启动自愈循环...`, 'error');
@@ -2584,6 +2875,7 @@ function setupGlobalAPI() {
       const stateToReturn: FullStatePayload = {
         currentItem: c[x] ? { title: c[x].歌名, artist: c[x].歌手, cover: c[x].封面 } : null,
         isPlaying: StateManager.isPlaying(),
+        playbackState: StateManager.getPlaybackState(),
         playbackMode: StateManager.getPlaybackMode(),
         masterVolume: StateManager.getVolume(),
         playlist: c.map(t => ({ title: t.歌名, artist: t.歌手, cover: t.封面 })),
@@ -2593,11 +2885,36 @@ function setupGlobalAPI() {
       console.dir(stateToReturn);
       return stateToReturn;
     },
+
     onFullStateUpdate: (c: (payload: FullStatePayload) => void) => {
-      if (typeof c === 'function') fullStateUpdateCallbacks.push(c);
+      if (typeof c === 'function') {
+        fullStateUpdateCallbacks.push(c);
+        logProbe(`[API] 前端注册了 fullStateUpdate 监听器。当前监听数: ${fullStateUpdateCallbacks.length}`);
+
+        return () => {
+          const index = fullStateUpdateCallbacks.indexOf(c);
+          if (index > -1) {
+            fullStateUpdateCallbacks.splice(index, 1);
+            logProbe(`[API] 前端注销了 fullStateUpdate 监听器。剩余监听数: ${fullStateUpdateCallbacks.length}`);
+          }
+        };
+      }
+
+      return () => {};
     },
+
     onTimeUpdate: (c: (payload: TimeUpdatePayload) => void) => {
-      if (typeof c === 'function') timeUpdateCallbacks.push(c);
+      if (typeof c === 'function') {
+        timeUpdateCallbacks.push(c);
+
+        return () => {
+          const index = timeUpdateCallbacks.indexOf(c);
+          if (index > -1) {
+            timeUpdateCallbacks.splice(index, 1);
+          }
+        };
+      }
+      return () => {};
     },
   };
   initializeGlobal('musicPlayerAPI', window.musicPlayerAPI);
@@ -2639,13 +2956,14 @@ async function tryInitialize() {
         throw new Error('无法解析世界书配置，初始化中止。');
       }
 
-      const isMvuCard = config.triggers && Array.isArray(config.triggers) && config.triggers.length > 0;
+      const isMvuCard = config.isMvu;
       logProbe(`(探针-决策) 作者意图判断 -> 是MVU卡吗? ${isMvuCard}`);
 
       // --- 步骤二：分流 (Branch) & 等待 (Wait) ---
       if (isMvuCard) {
         logProbe('【指挥官】(路径选择) 检测到MVU卡，进入“安全路径”，开始等待MVU就绪...');
         // [原则: CQS] _waitForMvuGenesis 是一个“查询”，它询问外部环境状态，直到满足条件。
+        // 注意: MVU 模式的事件注册 (_registerMvuEventListeners) 是在 _waitForMvuGenesis 内部成功后触发的
         const mvuIsReady = await _waitForMvuGenesis();
         if (!mvuIsReady) {
           throw new Error('MVU集成初始化失败或超时，部分功能将不可用。');
@@ -2653,6 +2971,7 @@ async function tryInitialize() {
         logProbe('【指挥官】MVU已完全就绪，可以安全继续。');
       } else {
         logProbe('【指挥官】(路径选择) 检测到纯文字卡，进入“快速路径”。');
+        _registerTextEventListeners();
       }
 
       // --- 步骤三：执行 (Execute) ---
@@ -2704,38 +3023,70 @@ function _registerMvuEventListeners() {
   };
 
   eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, createReconcileHandler('VARIABLE_UPDATE_ENDED'));
-  eventOn(tavern_events.MESSAGE_DELETED, createReconcileHandler('MESSAGE_DELETED'));
+
+  // [已移除] MESSAGE_DELETED 已移动至 _registerContextualEventListeners 以实现通用支持
 
   logProbe('[EventDispatcher] MVU监听器部署完毕。');
 }
 
 /**
+ * 注册纯文字模式 ("吟游诗人") 专属的事件监听器。
+ * 职责: 监听文本变动事件，并直接呼叫校准官。
+ */
+function _registerTextEventListeners() {
+  logProbe('[EventDispatcher] 正在注册【吟游诗人】文本模式事件监听器...', 'group');
+
+  // 1. 监听 AI 生成完毕 (MESSAGE_RECEIVED)
+  eventOn(tavern_events.MESSAGE_RECEIVED, (id: number) => {
+    if (!isScriptActive) return;
+
+    logProbe(`[Event] 文本模式捕获到 MESSAGE_RECEIVED (id: ${id})，触发校准...`);
+    void _reconcilePlaylistQueue(undefined);
+  });
+
+  // 2. 监听 用户编辑消息 (MESSAGE_EDITED)
+  eventOn(tavern_events.MESSAGE_EDITED, async (id: number) => {
+    if (!isScriptActive) return;
+
+    logProbe(`[Event] 文本模式捕获到 MESSAGE_EDITED (id: ${id})，触发校准与UI补救...`);
+
+    // 第一步：校准播放队列（听觉层）
+    await _reconcilePlaylistQueue(undefined);
+
+    // 第二步：如果校准后队列有歌单，确保 UI 标签存在（视觉层）
+    await _ensureUiVisibility();
+  });
+
+  logProbe('[EventDispatcher] 文本模式监听器部署完毕。', 'groupEnd');
+}
+
+/**
  * [V9.1 核心处理器] 统一处理所有导致“运行时历史”变更的事件。
- * 职责：重新查找权威状态，然后调用校准官进行状态同步。
+ * 职责：通知校准官进行全量状态同步。
  * @param eventName - 触发此处理器的事件名，用于日志记录。
  */
 async function _handleHistoryChangeEvent(eventName: string, options?: { transitionEffect?: 'hard' | 'smooth' }) {
   logProbe(`[HistoryChange] 检测到历史变更事件: ${eventName}。`);
   if (!isCorePlayerInitialized) return;
 
-  logProbe(`[HistoryChange-Probe] 正在查询最新的权威MVU状态...`);
-  const authoritativeState = await _findLatestAuthoritativeMvuState();
-
-  if (!authoritativeState?.mvuData) {
-    logProbe('[HistoryChange] (守门员) 未找到有效的权威状态。这在AI重新生成期间是正常现象。', 'warn');
-    logProbe('[HistoryChange] (守门员) 采取“静默等待”策略，本次校准已跳过。');
+  if (triggers.length === 0) {
+    // 理论上 ParseConfig 阶段会为 Text 模式生成虚拟触发器，所以 triggers 不应为空。
+    // 但如果真的为空，说明没有任何音乐配置，直接跳过。
+    logProbe('[HistoryChange] (分流) 未检测到任何触发器配置，跳过校准。');
+    await _ensureUiVisibility();
     return;
   }
 
-  console.log(`[HistoryChange-Probe] 查询完毕，这是找到的权威状态数据，请您审查：`);
-  console.dir(_.cloneDeep(authoritativeState?.mvuData));
+  logProbe(`[HistoryChange] 正在委托校准官进行全量状态校准...`);
 
-  await _reconcilePlaylistQueue(authoritativeState?.mvuData, options);
+  // 校准官内部会根据 isMvuMode 自动决定是查 MVU 还是查 TextTagManager。
+  await _reconcilePlaylistQueue(undefined, options);
+
+  await _ensureUiVisibility();
 }
 
 /**
  * [V9.9 核心修正] 处理新AI消息渲染事件的专用处理器。
- * 它的职责是检查并立即注入 <playmusic/> 标签，以修复刷新竞态条件BUG。
  * (SRP: Single Responsibility Principle)
  * @param messageId - 由事件传来的消息ID。
  */
@@ -2743,25 +3094,126 @@ async function _handleNewAssistantMessage(messageId: number): Promise<void> {
   logProbe(`[Injector] 捕获到 CHARACTER_MESSAGE_RENDERED 事件，message_id: ${messageId}`);
 
   if (messageId === 0) {
-    logProbe(`[Injector] (探针) 操作中止：message_id 为 0 (开场白)，无需注入。`);
+    logProbe(`[Injector] (探针) 操作中止：message_id 为 0 (开场白)，权限属于作者，无需注入。`);
+    return;
+  }
+
+  const topQueueItem = StateManager.getTopQueueItem();
+  if (!topQueueItem) {
+    logProbe(`[Injector] (守门员) 拒绝注入：当前播放队列为空。`);
     return;
   }
 
   try {
     const message = getChatMessages(messageId)?.[0];
 
-    if (message?.role === 'assistant' && !message.message.includes('<DarkBramblePlayer/>')) {
+    if (message && message.role !== 'user' && !message.message.includes('<DarkBramblePlayer/>')) {
       logProbe(`[Injector] (探针) 条件满足，立即为 message_id: ${messageId} 执行注入...`);
 
       await setChatMessages([{ message_id: messageId, message: `${message.message}\n<DarkBramblePlayer/>` }]);
 
       logProbe(`[Injector] (探针) 注入成功。`);
     } else {
-      logProbe(`[Injector] (探针) 操作跳过：消息不满足注入条件 (可能不是AI消息，或已包含标签)。`);
+      logProbe(`[Injector] (探针) 操作跳过：消息是用户发送的，或已包含标签。Role: ${message?.role}`);
     }
   } catch (error) {
     logProbe(`[Injector] 为 message_id: ${messageId} 注入标签时发生严重错误:`, 'error');
     console.error(error);
+  }
+}
+
+/**
+ * [V9.95 新增] UI 可见性卫士。
+ * 职责：在 MVU 延迟加载或消息删除后，确保如果音乐在播放，界面一定存在。
+ * 原则：SSoT (以队列状态为准), 鲁棒性 (补救缺失的 UI)
+ */
+async function _ensureUiVisibility() {
+  logProbe('[UiGuard] 正在检查界面一致性 (高性能局部扫描)...', 'groupCollapsed');
+
+  const topQueueItem = StateManager.getTopQueueItem();
+  if (!topQueueItem) {
+    logProbe('[UiGuard] 队列为空，无需 UI。');
+    logProbe('', 'groupEnd');
+    return;
+  }
+
+  try {
+    // [步骤 1] 获取最后一条消息，作为定位锚点
+    // 参数 -1 表示获取最新的楼层
+    const lastMsgList = getChatMessages(-1);
+
+    if (!lastMsgList || lastMsgList.length === 0) {
+      logProbe('[UiGuard] 无法获取最新楼层锚点，检查中止。', 'warn');
+      logProbe('', 'groupEnd');
+      return;
+    }
+
+    // [步骤 2] 计算最近 10 楼的 ID 范围
+    // 假设最后一条 ID 是 100，我们想要 91-100 (共10条)
+    const lastId = lastMsgList[0].message_id;
+    // 使用 Math.max 确保不会算出负数 ID
+    const startId = Math.max(0, lastId - 9);
+    const rangeString = `${startId}-${lastId}`;
+
+    logProbe(`[UiGuard] 正在获取最近的 10 条消息 (ID范围: ${rangeString})...`);
+
+    // [步骤 3] 仅拉取这 10 条数据
+    // 接口支持 "StartID-EndID" 格式的字符串
+    const recentMessages = getChatMessages(rangeString);
+
+    if (!recentMessages || recentMessages.length === 0) {
+      logProbe('[UiGuard] 局部消息拉取为空，检查中止。', 'warn');
+      logProbe('', 'groupEnd');
+      return;
+    }
+
+    let foundTarget = false;
+
+    // [步骤 4] 倒序扫描这 10 条数据
+    for (let i = recentMessages.length - 1; i >= 0; i--) {
+      const msg = recentMessages[i];
+
+      // 1. 跳过用户消息
+      if (msg.role === 'user') {
+        continue;
+      }
+
+      // 2. 遇到开场白停止 (尊重作者排版)
+      if (msg.message_id === 0) {
+        logProbe('[UiGuard] 回溯至开场白，停止。');
+        break;
+      }
+
+      // 3. 检查是否已有标签
+      if (msg.message && msg.message.includes('<DarkBramblePlayer/>')) {
+        logProbe(`[UiGuard] 在 message_id: ${msg.message_id} 处发现已有标签，状态正常。`);
+        foundTarget = true;
+        break;
+      }
+
+      // 4. 执行注入
+      logProbe(`[UiGuard] 发现目标宿主: message_id: ${msg.message_id} (${msg.role})，执行补救注入...`);
+      const newContent = `${msg.message}\n<DarkBramblePlayer/>`;
+
+      await setChatMessages([
+        {
+          message_id: msg.message_id,
+          message: newContent,
+        },
+      ]);
+
+      logProbe('[UiGuard] 补救注入成功。');
+      foundTarget = true;
+      break;
+    }
+
+    if (!foundTarget) {
+      logProbe('[UiGuard] 在最近 10 条消息中未发现合适的注入点。');
+    }
+  } catch (error) {
+    logProbe(`[UiGuard] 执行补救注入时发生错误: ${error}`, 'error');
+  } finally {
+    logProbe('', 'groupEnd');
   }
 }
 
@@ -2785,15 +3237,68 @@ async function _executeSoftReset(options?: { autoPlayIfWasPlaying?: boolean }) {
   }
 }
 
+/**
+ * [V9.9 原始数据卫士] (Raw Data Guard)
+ * 职责 (Query): 直接穿透封装层，检查酒馆内存中指定消息的内容是否已就绪。
+ * 这是区分 "浏览历史" (内容已存在) 和 "触发生成" (内容为空) 的唯一事实来源。
+ */
+function _isSwipeContentReady(messageId: number): boolean {
+  // 1. 安全获取上下文
+  // [修复] 必须通过 window.parent 才能在 iframe 中访问到酒馆的真实数据
+  const context = (window.parent as any).SillyTavern?.getContext?.();
+
+  if (!context || !context.chat) {
+    // 极罕见情况：如果上下文不存在，为安全起见视为未就绪
+    return false;
+  }
+
+  // 2. 获取消息对象
+  const msg = context.chat[messageId];
+  if (!msg) return false;
+
+  // 3. 获取指针和数据槽
+  const pointer = msg.swipe_id;
+  const swipes = msg.swipes;
+
+  // 4. 核心判定：必须是字符串且长度大于0
+  if (Array.isArray(swipes) && typeof pointer === 'number') {
+    const content = swipes[pointer];
+    // 只有当内容是实实在在的字符串，且不是空串时，才视为历史记录
+    return typeof content === 'string' && content.length > 0;
+  }
+
+  return false;
+}
+
 function _registerContextualEventListeners() {
   logProbe('[EventDispatcher] 正在注册“上下文专属”事件监听器...');
 
   eventOn(tavern_events.CHARACTER_MESSAGE_RENDERED, (id: number) => {
+    if (!isScriptActive) return;
     void _handleNewAssistantMessage(id);
   });
 
+  eventOn(tavern_events.MESSAGE_DELETED, (deletedId: number) => {
+    if (!isScriptActive) return;
+    logProbe(`[EventAdapter] 捕获到删除事件 (原ID: ${deletedId})，正在通过“高级历史通道”触发全量校准...`);
+    void _handleHistoryChangeEvent('MESSAGE_DELETED');
+  });
+
   eventOn(tavern_events.MESSAGE_SWIPED, (id: number) => {
-    logProbe(`[Event] 捕获到滑动事件 (message_id: ${id})。`);
+    if (!isScriptActive) return;
+
+    // 原始数据卫士 (Raw Data Guard)
+    // 目的: 区分 "浏览历史Swipe" 和 "触发生成Swipe"
+    // 原理: 直接检查内存。如果内容为空，说明是生成行为，必须拦截。
+    if (!_isSwipeContentReady(id)) {
+      logProbe(
+        `[Event-Swipe] (卫士) 拦截生效！检测到 message_id: ${id} 的内容尚未填充 (生成中/空内容)，忽略本次操作。`,
+        'warn',
+      );
+      return;
+    }
+
+    logProbe(`[Event] 捕获到滑动事件 (message_id: ${id})。卫士已放行 (内容已就绪)。`);
     if (!isCorePlayerInitialized) return;
 
     if (id === 0) {
@@ -2872,7 +3377,6 @@ async function _waitForMvuGenesis(): Promise<boolean> {
 }
 
 $(() => {
-  logProbe('音乐播放器脚本 V8.4 “上下文感知” 启动');
   PlaybackEngine.initialize();
   setupGlobalAPI();
 
