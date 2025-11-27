@@ -1,4 +1,4 @@
-console.log('音乐播放器脚本9.2.2版本');
+console.log('音乐播放器脚本9.2.3版本');
 
 // =================================================================
 // 0. 诊断工具 (Diagnostic Tools)
@@ -276,13 +276,12 @@ const MvuManager = (() => {
             const endMinutes = _parseTimeToMinutes(endStr);
 
             if (startMinutes !== null && endMinutes !== null) {
-              // [代码风格修正] 移除不必要的嵌套 if，使代码更简洁
               if (startMinutes <= endMinutes) {
                 // 普通范围
-                conditionMet = currentTimeInMinutes >= startMinutes && currentTimeInMinutes <= endMinutes;
+                conditionMet = currentTimeInMinutes >= startMinutes && currentTimeInMinutes < endMinutes;
               } else {
                 // 跨天范围
-                conditionMet = currentTimeInMinutes >= startMinutes || currentTimeInMinutes <= endMinutes;
+                conditionMet = currentTimeInMinutes >= startMinutes || currentTimeInMinutes < endMinutes;
               }
             }
           }
@@ -455,7 +454,7 @@ const TextTagManager = (() => {
    * [核心算法] 滑动窗口回溯扫描。
    * 性能: O(1) - 无论聊天记录多长，最多只拉取最近 20 条。
    */
-  async function _getLatestState(): Promise<Record<string, any>> {
+  async function _getLatestState(): Promise<{ tags: Record<string, any>; foundAtMessageId: number }> {
     logProbe('[TextTagManager] (Query) 开始执行文本回溯扫描...', 'groupCollapsed');
 
     try {
@@ -464,7 +463,8 @@ const TextTagManager = (() => {
       if (!latestMsgs || latestMsgs.length === 0) {
         logProbe('[TextTagManager] 无法获取最新消息锚点，返回空状态。', 'warn');
         logProbe('', 'groupEnd');
-        return { 'virtual.music_tag': null };
+        //返回统一结构
+        return { tags: { 'virtual.music_tag': null }, foundAtMessageId: -1 };
       }
 
       const lastId = latestMsgs[0].message_id;
@@ -481,7 +481,7 @@ const TextTagManager = (() => {
       for (let i = msgs.length - 1; i >= 0; i--) {
         const msg = msgs[i];
 
-        // [过滤] 严格忽略用户的输入，防止用户通过发送标签操控 BGM
+        // [过滤] 严格忽略用户消息
         if (msg.role === 'user') {
           continue;
         }
@@ -500,7 +500,7 @@ const TextTagManager = (() => {
           if (rawId.toLowerCase() === 'null') {
             logProbe(`[TextTagManager] 在 message_id: ${msg.message_id} 找到明确的空指令 <scene:null>。`);
             logProbe('', 'groupEnd');
-            return { 'virtual.music_tag': null };
+            return { tags: { 'virtual.music_tag': null }, foundAtMessageId: msg.message_id };
           }
 
           const normalizedId = rawId.toLowerCase();
@@ -508,7 +508,7 @@ const TextTagManager = (() => {
             `[TextTagManager] 命中! 在 message_id: ${msg.message_id} 找到标签: "${rawId}" -> 归一化: "${normalizedId}"`,
           );
           logProbe('', 'groupEnd');
-          return { 'virtual.music_tag': normalizedId };
+          return { tags: { 'virtual.music_tag': normalizedId }, foundAtMessageId: msg.message_id };
         }
 
         // [规则] 遇到第一条 AI 消息，即使没有标签，也必须停止扫描。
@@ -518,17 +518,18 @@ const TextTagManager = (() => {
           `[TextTagManager] 在 message_id: ${msg.message_id} (AI) 中未发现标签。根据“无标签即空”原则，扫描结束。`,
         );
         logProbe('', 'groupEnd');
-        return { 'virtual.music_tag': null };
+        //虽然没标签，但也算是在这楼“确认了没有”，所以返回 -1 或当前ID均可，这里返回 -1 表示没有命中有效标签
+        return { tags: { 'virtual.music_tag': null }, foundAtMessageId: -1 };
       }
 
       // 5. 兜底
       logProbe('[TextTagManager] 扫描完窗口内所有消息，未发现有效 AI 消息。返回空状态。');
       logProbe('', 'groupEnd');
-      return { 'virtual.music_tag': null };
+      return { tags: { 'virtual.music_tag': null }, foundAtMessageId: -1 };
     } catch (error) {
       logProbe(`[TextTagManager] 扫描过程中发生错误: ${error}`, 'error');
       logProbe('', 'groupEnd');
-      return { 'virtual.music_tag': null };
+      return { tags: { 'virtual.music_tag': null }, foundAtMessageId: -1 };
     }
   }
 
@@ -1383,8 +1384,9 @@ async function _reconcilePlaylistQueue(eventPayload?: any, options?: { transitio
       } else {
         // [路径 B: Text 模式]
         logProbe('[Reconciler] (事实) 进入 Text 模式状态获取流程...');
-        currentStateData = await TextTagManager.getLatestState();
-        logProbe('[Reconciler] (事实) TextTagManager 已返回标准化状态。');
+        const textResult = await TextTagManager.getLatestState();
+        currentStateData = textResult.tags;
+        logProbe(`[Reconciler] (事实) TextTagManager 已返回标准化状态 (FoundAt: ${textResult.foundAtMessageId})。`);
       }
 
       // --- 3. 【生成报告】: 委托 MvuManager 进行边沿检测 ---
@@ -1404,13 +1406,29 @@ async function _reconcilePlaylistQueue(eventPayload?: any, options?: { transitio
       }
 
       if (changeReport.newlyActiveTriggers.length > 0) {
+        // 获取当前队列中的基础歌单ID，用于同名排斥检查
+        const baseItem = newQueue.find(item => item.triggeredBy === 'base');
+        const currentBaseId = baseItem?.playlistId;
+
         for (const activeTrigger of changeReport.newlyActiveTriggers) {
+          // 1.自身重复性检查
           if (
             newQueue.some(item => item.triggerSource && areTriggersFunctionallyEqual(item.triggerSource, activeTrigger))
           ) {
             logProbe(`[Reconciler] (防御) 拒绝添加重复的激活项: "${activeTrigger.playlist_id}"`, 'warn');
             continue;
           }
+
+          // 2. 同名排斥机制
+          // 如果新触发的场景歌单 ID 与当前的基础歌单 ID 相同，则视为冗余，拒绝添加。
+          if (currentBaseId && activeTrigger.playlist_id === currentBaseId) {
+            logProbe(
+              `[Reconciler] (同名排斥) 触发器 "${activeTrigger.playlist_id}" 指向当前基础歌单，拒绝重复添加。`,
+              'warn',
+            );
+            continue;
+          }
+
           const newItem = createQueueItem({
             type: 'mvu',
             playlistId: activeTrigger.playlist_id,
@@ -1422,7 +1440,6 @@ async function _reconcilePlaylistQueue(eventPayload?: any, options?: { transitio
           }
         }
       }
-
       StateManager.updateQueue(newQueue);
 
       // --- 5. 【决策与执行】: 对比新旧队首 ---
@@ -2183,6 +2200,15 @@ async function initializePlayerForChat(
             );
           }
         } else {
+          //实施同名排斥：场景层不能与基础层重叠
+          if (correctBasePlaylistId && persistedItem.playlistId === correctBasePlaylistId) {
+            logProbe(
+              `(净化-丢弃) 触发器歌单 "${persistedItem.playlistId}" 与当前权威基础歌单重名 (同名排斥原则)。`,
+              'warn',
+            );
+            continue;
+          }
+
           const currentTrigger = triggers.find(t => t.playlist_id === persistedItem.playlistId);
           logProbe(`(探针-净化) 正在审查存档的MVU歌单 "${persistedItem.playlistId}"...`);
 
@@ -2213,12 +2239,25 @@ async function initializePlayerForChat(
     if (currentStatData && triggers.length > 0) {
       logProbe('[Initializer-Heal] (补充) 正在检查是否有新激活的场景歌单...', 'groupCollapsed');
       for (const trigger of triggers) {
+        // 1. 先检查是否已存在队列中
         const alreadyExists = finalQueue.some(
           item => item.triggerSource && areTriggersFunctionallyEqual(item.triggerSource, trigger),
         );
+        if (alreadyExists) continue;
 
-        if (!alreadyExists && MvuManager.checkTriggerCondition(trigger, currentStatData)) {
+        // 2. 先检查条件是否满足
+        if (MvuManager.checkTriggerCondition(trigger, currentStatData)) {
+          // 3. 同名排斥检查
+          if (correctBasePlaylistId && trigger.playlist_id === correctBasePlaylistId) {
+            logProbe(
+              `(补充-跳过) 虽然触发条件满足，但触发器 "${trigger.playlist_id}" 指向当前基础歌单，拒绝重复添加 (同名排斥)。`,
+            );
+            continue;
+          }
+
           const playlistConfig = allPlaylists[trigger.playlist_id];
+
+          // 4. Pop 规则检查 (防诈尸)
           if (playlistConfig && playlistConfig.onFinishRule === 'pop') {
             if (authoritativeMessageId === 0) {
               logProbe(`(补充) 允许添加 'pop' 歌单 "${trigger.playlist_id}"，因为上下文是开场白。`);
@@ -2226,11 +2265,12 @@ async function initializePlayerForChat(
               if (newItem) finalQueue.push(newItem);
             } else {
               logProbe(
-                `(补充-阻止) 场景歌单 "${trigger.playlist_id}" 因规则为 'pop' 且上下文非开场白而被忽略。`,
+                `(补充-阻止) 场景歌单 "${trigger.playlist_id}" 已激活，但因规则为 'pop' 且上下文非开场白而被忽略 (防诈尸)。`,
                 'warn',
               );
             }
           } else {
+            // Loop 规则，直接添加
             const newItem = createQueueItem({ type: 'mvu', playlistId: trigger.playlist_id, trigger: trigger });
             if (newItem) finalQueue.push(newItem);
           }
@@ -2991,7 +3031,15 @@ async function tryInitialize() {
         logProbe('【指挥官】(查询) 正在为MVU卡查找权威状态...');
         authoritativeState = await _findLatestAuthoritativeMvuState();
       } else {
-        logProbe('【指挥官】(跳过) 纯文字卡，无需查找MVU状态。');
+        logProbe('【指挥官】(执行) 纯文字卡，正在查找最新的文本标签状态...');
+        const textResult = await TextTagManager.getLatestState();
+
+        //构造统一的权威状态对象 (Unified Authority Object)
+        authoritativeState = {
+          mvuData: { stat_data: textResult.tags },
+          messageId: textResult.foundAtMessageId,
+        };
+        logProbe(`【指挥官】文本状态获取完成 (Anchor ID: ${textResult.foundAtMessageId})。`);
       }
 
       await initializePlayerForChat(config, authoritativeState);
