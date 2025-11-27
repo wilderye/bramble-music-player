@@ -1704,35 +1704,44 @@ async function _findLatestAuthoritativeMvuState(context?: {
     }
   }
 
-  // --- 模式二: 回溯扫描 (找不到精确目标时的标准流程) ---
-  logProbe('[StateFinder] (回溯扫描模式) 开始执行...', 'groupCollapsed');
+  // --- 模式二: 查询最新权威状态 ---
+  logProbe('[StateFinder] (查询最新状态) 开始执行...', 'groupCollapsed');
   try {
-    const allMessages = getChatMessages(-1, { include_swipes: true });
-    for (let i = allMessages.length - 1; i >= 0; i--) {
-      const message = allMessages[i];
-      // [V9.7 核心修正] 修复致命拼写错误：message.id -> message.message_id
+    // 1. 获取最新的一条消息
+    const latestMsgs = getChatMessages(-1, { include_swipes: true });
+
+    if (latestMsgs && latestMsgs.length > 0) {
+      const message = latestMsgs[0];
+
+      // 接口规范：消息 ID 的字段名为 message_id，而非 id。
       const currentMessageId = message.message_id;
 
-      // 防御性编程：如果 message_id 无效，直接跳过，防止意外
-      if (typeof currentMessageId !== 'number') {
-        logProbe(`(探针) 跳过无效楼层 (索引 ${i})，因其 message_id 为 ${currentMessageId}。`, 'warn');
-        continue;
-      }
+      // 2. 防御性编程：检查 ID 有效性
+      if (typeof currentMessageId === 'number') {
+        logProbe(`(探针) 正在锁定最新消息楼层 id: ${currentMessageId}...`);
 
-      try {
-        logProbe(`(探针) 正在查询 message_id: ${currentMessageId}...`);
-        const mvuData = await Mvu.getMvuData({ type: 'message', message_id: currentMessageId });
+        try {
+          // 3. 直接查询 MVU 数据
+          const mvuData = await Mvu.getMvuData({ type: 'message', message_id: currentMessageId });
 
-        if (mvuData?.stat_data) {
-          logProbe(`[StateFinder] 查找成功！在 message_id: ${currentMessageId} 处找到权威状态。`);
-          logProbe('', 'groupEnd');
-          return { mvuData, messageId: currentMessageId };
+          if (mvuData?.stat_data) {
+            logProbe(`[StateFinder] 查找成功！在最新消息 (id: ${currentMessageId}) 处找到权威状态。`);
+            logProbe('', 'groupEnd');
+            return { mvuData, messageId: currentMessageId };
+          } else {
+            // 如果最新楼层没有数据，通常意味着这一楼没有触发 MVU 更新
+            logProbe(`[StateFinder] 最新楼层 (${currentMessageId}) 未包含 stat_data。`, 'warn');
+          }
+        } catch (error) {
+          logProbe(`[StateFinder] 查询 MVU 接口时发生错误: ${error}`, 'error');
         }
-      } catch (error) {
-        logProbe(`(探针) 查询 message_id: ${currentMessageId} 时接口失败，将继续向前查找。错误: ${error}`, 'warn');
+      } else {
+        logProbe(`[StateFinder] 获取到的最新消息 ID 无效: ${currentMessageId}`, 'warn');
       }
+    } else {
+      logProbe('[StateFinder] 无法获取最新消息，聊天记录可能为空。', 'warn');
     }
-    logProbe('[StateFinder] 查找失败：遍历完所有消息楼层，均未找到有效的 stat_data。', 'warn');
+
     return null;
   } catch (error) {
     logProbe(`[StateFinder] 在获取聊天记录时发生严重错误: ${error}`, 'error');
