@@ -27,10 +27,9 @@ function formatStructuredTracks(tracks: StructuredTrack[]): string {
   let yaml = 'tracks:\n';
   tracks.forEach(t => {
     yaml += indent(1) + `- url: "${t.url.trim()}"\n`;
-    // 选填字段，有才显示，保持 Prompt 简洁
-    if (t.title.trim()) yaml += indent(2) + `title: "${t.title.trim()}"\n`;
-    if (t.artist.trim()) yaml += indent(2) + `artist: "${t.artist.trim()}"\n`;
-    if (t.cover.trim()) yaml += indent(2) + `cover: "${t.cover.trim()}"\n`;
+    if (t.title.trim()) yaml += indent(2) + `歌名: "${t.title.trim()}"\n`;
+    if (t.artist.trim()) yaml += indent(2) + `歌手: "${t.artist.trim()}"\n`;
+    if (t.cover.trim()) yaml += indent(2) + `封面: "${t.cover.trim()}"\n`;
   });
   return yaml;
 }
