@@ -73,6 +73,7 @@ function formatMvuConfig(playlist: Playlist): string {
   return yaml;
 }
 
+
 /**
  * 核心生成函数
  */
@@ -80,67 +81,71 @@ export function generatePrompt(state: ProjectState): string {
   const { playlists, targetType, defaultPlaylistId } = state;
   const isMvu = targetType === 'mvu';
 
-  // 1. Header
-  let prompt = `以下是用户的歌单配置信息。请你检查完整性，解析未格式化的歌曲文本，并输出最终的 YAML [MusicConfig] 配置。\n\n`;
+  // 1. Header (指令部分，不包裹在代码块中)
+  const header = `以下是用户的歌单配置信息。请你检查完整性，解析未格式化的歌曲文本，并输出最终的 YAML [MusicConfig] 配置。\n\n`;
 
-  // 2. Global Block
-  prompt += `(全局块)\n`;
-  prompt += `运行模式: [is_mvu: ${isMvu}]\n`;
+  // 2. Body (数据部分，包裹在代码块中)
+  let body = '```yaml\n';
+
+  // --- 全局块 ---
+  body += `(全局配置)\n`;
+  body += `运行模式: [is_mvu: ${isMvu}]\n`;
 
   // 只有在 ID 有效且属于当前列表时才写入
-  // 且必须是 Base 类型 (防止逻辑错误)
   const defaultPlaylist = playlists.find(p => p.id === defaultPlaylistId);
-  const isValidDefault = defaultPlaylist && (!isMvu || defaultPlaylist.mvuConfig.type === 'base');
+  const isValidDefault = defaultPlaylist && defaultPlaylist.mvuConfig.type === 'base';
 
   if (isValidDefault && defaultPlaylistId) {
-    prompt += `默认基础歌单ID: ${defaultPlaylistId}\n`;
+    body += `默认基础歌单ID: ${defaultPlaylistId}\n`;
   } else {
-    // 显式告诉 AI 没有默认歌单，防止它幻觉补全
-    prompt += `默认基础歌单ID: (无) - 用户未指定，请勿自动设置任何默认歌单\n`;
+    body += `默认基础歌单ID: (无) - 用户未指定，不要设置默认歌单\n`;
   }
-  prompt += `\n`;
+  body += `\n`;
 
-  // 3. Playlists Block
-
+  // --- 歌单块 ---
   playlists.forEach((p, index) => {
-    prompt += `=========================\n`;
-    prompt += `【歌单 ${index + 1} 数据】\n`;
-    prompt += `ID: ${p.id}\n`;
-    prompt += `结束规则: ${p.onFinishRule}\n`;
+    body += `=========================\n`;
+    body += `【歌单 ${index + 1}】\n`;
 
-    // A. 歌曲部分
+    // A. 通用核心数据 (所有模式、所有类型都必须输出)
+    body += `ID: ${p.id}\n`;
+    // 明确输出类型，即使是文字卡也要告诉 AI 这是“场景”还是“基础”
+    const typeLabel = p.mvuConfig.type === 'base' ? '基础歌单' : '场景歌单';
+    body += `类型: ${typeLabel}\n`;
+    body += `结束规则: ${p.onFinishRule}\n`;
+
+    // B. 歌曲数据
     if (p.trackInputMode === 'structured') {
-      prompt += `\n[歌曲列表 (已格式化-请直接采纳)]\n`;
-      prompt += formatStructuredTracks(p.tracksStructured);
+      body += `\n[歌曲列表 (已格式化-请直接采纳)]\n`;
+      body += formatStructuredTracks(p.tracksStructured);
     } else {
-      prompt += `\n[歌曲列表 (原始文本-请解析为YAML)]\n`;
-      prompt += (p.tracksRaw || '').trim() + `\n`;
+      body += `\n[歌曲列表 (原始文本-请解析为YAML)]\n`;
+      body += (p.tracksRaw || '').trim() + `\n`;
     }
 
-    // B. 触发逻辑部分
-    if (isMvu) {
-      if (p.mvuConfig.type === 'base') {
-        prompt += `\n[类型]: 基础歌单 (无需触发器，作为背景音乐候选项)\n`;
-      } else {
-        prompt += `\n[类型]: 场景歌单 (条件触发)\n`;
-
-        // MVU Scene: 如果有 InitVar，先输出
+    // C. 场景触发逻辑 (仅场景歌单需要)
+    if (p.mvuConfig.type === 'scene') {
+      if (isMvu) {
+        // MVU 模式: 输出 InitVar 和 触发器YAML
         if (p.mvuConfig.initVarRaw && p.mvuConfig.initVarRaw.trim()) {
-          prompt += `\n[InitVar (仅供参考变量结构)]\n`;
-          prompt += p.mvuConfig.initVarRaw.trim() + `\n`;
+          body += `\n[InitVar (仅供参考变量结构)]\n`;
+          body += p.mvuConfig.initVarRaw.trim() + `\n`;
         }
-
-        // 输出触发器
-        prompt += `\n` + formatMvuConfig(p);
+        // 这里会调用 formatMvuConfig，它内部已经过滤了无效的触发器条目
+        body += `\n` + formatMvuConfig(p);
+      } else {
+        // 文字模式: 输出情景描述
+        body += `\n[情景描述]\n`;
+        body += (p.textConfig.sceneDescription || '').trim() + `\n`;
       }
     } else {
-      // Text Mode
-      prompt += `\n[情景描述]\n`;
-      prompt += (p.textConfig.sceneDescription || '').trim() + `\n`;
+      // 基础歌单
+      body += `\n[触发条件]: 无 (作为基础背景音乐)\n`;
     }
   });
 
-  prompt += `=========================\n`;
+  body += `=========================\n`;
+  body += '```'; // 代码块结束
 
-  return prompt;
+  return header + body;
 }

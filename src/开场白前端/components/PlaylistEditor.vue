@@ -103,7 +103,13 @@
           >
             Pop (播完即焚)
           </button>
-        </div>
+</div>
+
+        <!-- [新增] 解释说明文本 -->
+        <!-- whitespace-pre-line 用于识别文案中的换行符 \n -->
+        <p class="mt-3 text-base whitespace-pre-line text-stone-500">
+          {{ finishRuleDescription }}
+        </p>
       </div>
 
       <!-- Field 4: 歌曲列表 -->
@@ -278,6 +284,23 @@ defineEmits<{
 
 // --- Computed ---
 const currentType = computed(() => playlist.value.mvuConfig.type);
+
+// [新增] 动态计算播放模式的解释文案
+const finishRuleDescription = computed(() => {
+  const isBase = currentType.value === 'base';
+  const isLoop = playlist.value.onFinishRule === 'loop';
+
+  if (isBase) {
+    if (isLoop) return '只要没有满足条件的场景歌单，则循环播放基础歌单。';
+    return '只要没有满足条件的场景歌单，则播放基础歌单，播完歌单后停止播放。';
+  } else {
+    // 场景歌单 (Scene)
+    if (isLoop) {
+      return '当场景歌单满足条件时，循环播放，直到不再满足。\n此时如有未播完或loop模式的基础歌单，则播放基础歌单。';
+    }
+    return '当场景歌单满足条件时播放，直到播完一次或不再满足条件。\n此时如有未播完或loop模式的基础歌单，则播放基础歌单。';
+  }
+});
 
 // --- Methods ---
 const setPlaylistType = (type: MvuPlaylistType) => {

@@ -2,7 +2,7 @@
   <div class="flex h-full w-full flex-col bg-[#FDFCF8] p-6 pb-20 dark:bg-[#1c1917]">
     <!-- 1. 顶部导航 -->
     <header class="flex w-full items-center justify-between py-4">
-      <!-- 左侧：返回首页 (样式与 Setup 统一) -->
+      <!-- 左侧：返回首页 -->
       <button
         type="button"
         class="group flex items-center rounded-full px-4 py-2 text-sm font-bold text-stone-500 transition-all hover:bg-stone-100 hover:text-stone-800 dark:text-stone-400 dark:hover:bg-stone-800 dark:hover:text-stone-200"
@@ -122,8 +122,7 @@
               </TransitionGroup>
             </div>
 
-            <!-- C. 全局配置与生成 (强隔离，仅在列表存在时显示) -->
-            <!-- 使用 mt-32 拉开巨大间距，引导视线 -->
+            <!-- C. 全局配置与生成 -->
             <div class="mt-32 flex flex-col items-center">
               <!-- 全局配置卡片 -->
               <div
@@ -160,11 +159,11 @@
                 <p class="mt-3 text-sm text-stone-500">基础歌单才可以作为默认歌单。</p>
               </div>
 
-              <!-- 生成按钮 -->
+              <!-- 生成按钮 (点击后弹出确认框) -->
               <button
                 type="button"
                 class="w-fit rounded-full bg-[#5C7F67] px-16 py-4 text-xl font-bold text-white shadow-[0_10px_30px_-5px_rgba(92,127,103,0.4)] transition-all hover:-translate-y-1 hover:bg-[#4A6852] hover:shadow-[0_20px_40px_-5px_rgba(92,127,103,0.5)] active:translate-y-0 active:scale-95"
-                @click="handleGenerate"
+                @click="handleGenerateCheck"
               >
                 生成并发送给 AI
                 <i class="fas fa-paper-plane ml-3"></i>
@@ -175,7 +174,7 @@
       </div>
     </main>
 
-    <!-- 3. 帮助模态窗 (Modal) -->
+    <!-- 3. 帮助模态窗 (Help Modal) -->
     <Transition name="fade">
       <div
         v-if="showHelpModal"
@@ -199,12 +198,13 @@
         </div>
       </div>
     </Transition>
-    <!-- 4. 发送提示模态窗 (Tip Modal) -->
+
+    <!-- 4. 发送确认模态窗 (Confirmation Modal) -->
     <Transition name="fade">
       <div
-        v-if="showTipModal"
+        v-if="showConfirmModal"
         class="fixed inset-0 z-[60] flex items-center justify-center bg-stone-900/30 p-6 backdrop-blur-sm"
-        @click.self="showTipModal = false"
+        @click.self="showConfirmModal = false"
       >
         <div
           class="relative w-full max-w-md scale-100 rounded-3xl bg-white p-8 shadow-2xl transition-all dark:bg-stone-800"
@@ -213,37 +213,49 @@
           <button
             type="button"
             class="absolute top-4 right-4 p-2 text-stone-400 hover:text-stone-600 dark:hover:text-stone-200"
-            @click="showTipModal = false"
+            @click="showConfirmModal = false"
           >
             <i class="fas fa-times"></i>
           </button>
 
           <!-- 内容 -->
           <div class="flex flex-col items-center text-center">
+            <!-- 问号图标 -->
             <div
               class="mb-5 flex h-16 w-16 items-center justify-center rounded-full bg-[#5C7F67]/10 text-2xl text-[#5C7F67]"
             >
               <i class="fas fa-paper-plane"></i>
             </div>
 
-            <h3 class="mb-4 text-xl font-bold text-stone-800 dark:text-stone-100">歌单配置已发送</h3>
+            <h3 class="mb-4 text-xl font-bold text-stone-800 dark:text-stone-100">是否发送？</h3>
 
-            <p class="mb-6 text-base leading-relaxed text-stone-600 dark:text-stone-300">
-              请等待 AI 回复和指导后续操作。<br /><br />
-              <span class="text-sm text-stone-500">
-                💡 建议使用
-                <span class="font-bold text-[#5C7F67]">Default</span> 预设，并关掉不相关的世界书，否则可能挤占 AI
-                注意力导致生成配置出错哦。
-              </span>
+            <!-- 提示文本 (主要内容) -->
+            <p class="mb-8 text-base leading-relaxed text-stone-600 dark:text-stone-300">
+              💡 建议使用
+              <span class="font-bold text-[#5C7F67]">Default</span> 预设，并关掉不相关的世界书，否则可能挤占 AI
+              注意力导致生成配置出错哦。
             </p>
 
-            <button
-              type="button"
-              class="rounded-full bg-[#5C7F67] px-8 py-2.5 text-sm font-bold text-white shadow-md transition-transform hover:scale-105 active:scale-95"
-              @click="showTipModal = false"
-            >
-              我知道了
-            </button>
+            <!-- 按钮组 -->
+            <div class="flex w-full gap-4">
+              <!-- 取消按钮 -->
+              <button
+                type="button"
+                class="flex-1 rounded-full bg-stone-100 py-3 text-sm font-bold text-stone-600 transition-colors hover:bg-stone-200 dark:bg-stone-700 dark:text-stone-300 dark:hover:bg-stone-600"
+                @click="showConfirmModal = false"
+              >
+                取消
+              </button>
+
+              <!-- 确认按钮 -->
+              <button
+                type="button"
+                class="flex-1 rounded-full bg-[#5C7F67] py-3 text-sm font-bold text-white shadow-md transition-transform hover:scale-105 hover:bg-[#4A6852] active:scale-95"
+                @click="confirmSend"
+              >
+                确认发送
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -275,7 +287,8 @@ const emit = defineEmits<{
 
 // --- Local State ---
 const showHelpModal = ref(false);
-const showTipModal = ref(false);
+const showConfirmModal = ref(false); // 重命名为 ConfirmModal
+
 // --- Computed ---
 const isMvu = computed(() => props.state.targetType === 'mvu');
 
@@ -294,10 +307,8 @@ const getIconClass = (playlist: Playlist) => {
 };
 
 const getPlaylistTypeLabel = (playlist: Playlist) => {
-  if (isMvu.value) {
-    return playlist.mvuConfig.type === 'base' ? '基础歌单' : '场景歌单';
-  }
-  return '普通歌单';
+  // 无论何种模式，都读取真实的类型字段
+  return playlist.mvuConfig.type === 'base' ? '基础歌单' : '场景歌单';
 };
 
 // --- Handlers ---
@@ -312,27 +323,43 @@ const handleSwitchMode = () => {
   }
 };
 
-const handleGenerate = () => {
+/**
+ * 步骤 1: 校验并弹出确认框
+ * 替代之前的 handleGenerate
+ */
+const handleGenerateCheck = () => {
   const result = validateGlobalState(props.state.playlists, props.state.targetType, props.state.defaultPlaylistId);
 
   if (!result.passed) {
     const errorMsg = `配置检查未通过：\n\n${result.messages.join('\n')}`;
-    if (typeof toastr !== 'undefined') toastr.error('配置存在问题', '发送失败');
+    if (typeof toastr !== 'undefined') toastr.error('配置存在问题', '发送中断');
     alert(errorMsg);
     return;
   }
 
+  // 校验通过，打开确认弹窗
+  showConfirmModal.value = true;
+};
+
+/**
+ * 步骤 2: 确认发送
+ * 在 Modal 点击“确认”后触发
+ */
+const confirmSend = () => {
   const promptText = generatePrompt(props.state);
 
   try {
     const command = `/send ${promptText} | /trigger`;
     if (typeof triggerSlash === 'function') {
       triggerSlash(command);
-      // 显示提示弹窗
-      showTipModal.value = true;
 
+      // 成功提示 (合并了之前的 Wait 文本)
       if (typeof toastr !== 'undefined') {
-        toastr.success(`已将 ${props.state.playlists.length} 个歌单配置发送给 AI`, '发送成功');
+        toastr.success(
+          `已将 ${props.state.playlists.length} 个歌单配置发送给 AI。请等待 AI 回复和指导后续操作。`,
+          '发送成功',
+          { timeOut: 4000 } // 停留 4s
+        );
       }
     } else {
       console.error('triggerSlash not found');
@@ -341,12 +368,15 @@ const handleGenerate = () => {
   } catch (e) {
     console.error(e);
     alert('发送指令时发生意外错误。');
+  } finally {
+    // 无论成功失败，都关闭弹窗
+    showConfirmModal.value = false;
   }
 };
 </script>
 
 <style scoped>
-/* 页面视图切换：柔和的淡入淡出位移 */
+/* 页面视图切换 */
 .fade-slide-enter-active,
 .fade-slide-leave-active {
   transition: all 0.5s cubic-bezier(0.25, 1, 0.5, 1);
@@ -354,12 +384,12 @@ const handleGenerate = () => {
 
 .fade-slide-enter-from {
   opacity: 0;
-  transform: translateY(20px); /* 新页面从下方浮出 */
+  transform: translateY(20px);
 }
 
 .fade-slide-leave-to {
   opacity: 0;
-  transform: translateY(20px); /* 旧页面向下方沉没，而不是上方，保持方向一致性更柔和 */
+  transform: translateY(20px);
 }
 
 /* 列表项增删动画 */
