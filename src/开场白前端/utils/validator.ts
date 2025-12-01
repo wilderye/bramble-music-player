@@ -13,8 +13,6 @@ export function validatePlaylistBasic(
   // ID 校验
   if (!playlist.id || !playlist.id.trim()) {
     errors['id'] = 'ID 不能为空';
-  } else if (!/^[a-zA-Z0-9_-]+$/.test(playlist.id)) {
-    errors['id'] = 'ID 仅支持字母、数字、下划线';
   } else if (existingIds.includes(playlist.id)) {
     errors['id'] = 'ID 已被使用，请更换';
   }
