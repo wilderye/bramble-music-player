@@ -6,11 +6,12 @@
       name="page"
       mode="out-in"
     >
-      <!-- View 1: 首页 -->
+    <!-- View 1: 首页 -->
       <Home
         v-if="state.currentView === 'home'"
         key="home"
         @start="navigate('setup')"
+        @skin="navigate('skin')"
       />
 
       <!-- View 2: 模式选择 -->
@@ -42,6 +43,13 @@
         :errors="{}"
         @back="navigate('dashboard')"
       />
+      <!-- View 5: 皮肤设置 -->
+      <SkinSetup
+        v-else-if="state.currentView === 'skin'"
+        key="skin"
+        v-model:skin-config="state.skinConfig"
+        @back="navigate('home')"
+      />
     </Transition>
 
   </div>
@@ -56,6 +64,7 @@ import PlaylistEditor from './components/PlaylistEditor.vue';
 import Dashboard from './views/Dashboard.vue';
 import Home from './views/Home.vue';
 import Setup from './views/Setup.vue';
+import SkinSetup from './views/SkinSetup.vue';
 
 // --- 全局状态初始化 ---
 const state = reactive<ProjectState>({
