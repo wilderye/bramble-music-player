@@ -64,6 +64,18 @@ const state = reactive<ProjectState>({
   targetType: 'mvu',
   defaultPlaylistId: null,
   playlists: [],
+  // [新增] 皮肤配置初始化
+  skinConfig: {
+    excludedComponents: [],
+    metaphor: {
+      visualRef: '',
+      entity: '',
+      texture: '',
+      dynamics: '',
+    },
+    styleKeywords: [],
+    freeformRequirements: '',
+  },
 });
 
 // --- Computed ---

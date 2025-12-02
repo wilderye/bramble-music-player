@@ -3,7 +3,7 @@
  */
 
 // --- 1. 视图与导航枚举 ---
-export type ViewName = 'home' | 'setup' | 'dashboard' | 'editor';
+export type ViewName = 'home' | 'setup' | 'dashboard' | 'editor' | 'skin';
 
 // --- 2. 基础业务枚举 ---
 export type TargetType = 'mvu' | 'text';
@@ -56,6 +56,20 @@ export interface Playlist {
   mvuConfig: MvuConfigData;
   textConfig: TextConfigData;
 }
+// --- 新增：皮肤配置相关类型 ---
+export interface SkinMetaphor {
+  visualRef: string; // 视觉参考
+  entity: string;    // 实体隐喻
+  texture: string;   // 材质触感
+  dynamics: string;  // 动态交互
+}
+
+export interface SkinConfig {
+  excludedComponents: string[]; // 被剔除的组件ID列表 (存用户不要的内容)
+  metaphor: SkinMetaphor;       // 隐喻配置
+  styleKeywords: string[];      // 选中的风格关键词
+  freeformRequirements: string; // 自由描述
+}
 
 // --- 5. 全局状态 ---
 export interface ProjectState {
@@ -64,6 +78,7 @@ export interface ProjectState {
   targetType: TargetType;
   defaultPlaylistId: string | null;
   playlists: Playlist[];
+  skinConfig: SkinConfig;
 }
 
 // --- 6. 校验结果 ---
