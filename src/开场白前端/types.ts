@@ -59,15 +59,15 @@ export interface Playlist {
 // --- 新增：皮肤配置相关类型 ---
 export interface SkinMetaphor {
   visualRef: string; // 视觉参考
-  entity: string;    // 实体隐喻
-  texture: string;   // 材质触感
-  dynamics: string;  // 动态交互
+  entity: string; // 实体隐喻
+  texture: string; // 材质触感
+  dynamics: string; // 动态交互
 }
 
 export interface SkinConfig {
   excludedComponents: string[]; // 被剔除的组件ID列表 (存用户不要的内容)
-  metaphor: SkinMetaphor;       // 隐喻配置
-  styleKeywords: string[];      // 选中的风格关键词
+  metaphor: SkinMetaphor; // 隐喻配置
+  styleKeywords: string[]; // 选中的风格关键词
   freeformRequirements: string; // 自由描述
 }
 

@@ -73,7 +73,6 @@ function formatMvuConfig(playlist: Playlist): string {
   return yaml;
 }
 
-
 /**
  * 核心生成函数
  */

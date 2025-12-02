@@ -103,7 +103,7 @@
           >
             Pop (播完即焚)
           </button>
-</div>
+        </div>
 
         <!-- [新增] 解释说明文本 -->
         <!-- whitespace-pre-line 用于识别文案中的换行符 \n -->
