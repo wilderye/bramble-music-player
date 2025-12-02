@@ -48,7 +48,7 @@
           type="button"
           class="fade-in-up group relative flex w-full items-center gap-5 rounded-2xl bg-white p-5 text-left shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] transition-all hover:-translate-y-1 hover:shadow-[0_10px_30px_-4px_rgba(92,127,103,0.15)] dark:bg-stone-800 dark:shadow-none"
           style="animation-delay: 400ms"
-          title="该功能即将上线"
+          @click="$emit('skin')"
         >
           <div
             class="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#5C7F67]/10 text-[#5C7F67] transition-transform group-hover:scale-110 dark:bg-[#5C7F67]/20"
@@ -82,6 +82,7 @@
 <script setup lang="ts">
 defineEmits<{
   (e: 'start'): void;
+  (e: 'skin'): void;
 }>();
 </script>
 
