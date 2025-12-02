@@ -358,7 +358,7 @@ const confirmSend = () => {
         toastr.success(
           `已将 ${props.state.playlists.length} 个歌单配置发送给 AI。请等待 AI 回复和指导后续操作。`,
           '发送成功',
-          { timeOut: 4000 } // 停留 4s
+          { timeOut: 4000 }, // 停留 4s
         );
       }
     } else {

@@ -1,6 +1,5 @@
 <template>
   <div class="flex h-full w-full flex-col bg-[#FDFCF8] px-6 pb-32 transition-colors duration-500 dark:bg-[#1c1917]">
-
     <!-- 1. 顶部导航 -->
     <header class="flex w-full items-center py-6">
       <button
@@ -8,7 +7,9 @@
         class="group flex items-center text-lg font-bold text-stone-500 transition-colors hover:text-stone-800 dark:text-stone-400 dark:hover:text-stone-200"
         @click="$emit('back')"
       >
-        <div class="mr-3 flex h-10 w-10 items-center justify-center rounded-full bg-stone-100 transition-colors group-hover:bg-stone-200 dark:bg-stone-800 dark:group-hover:bg-stone-700">
+        <div
+          class="mr-3 flex h-10 w-10 items-center justify-center rounded-full bg-stone-100 transition-colors group-hover:bg-stone-200 dark:bg-stone-800 dark:group-hover:bg-stone-700"
+        >
           <i class="fas fa-arrow-left text-sm"></i>
         </div>
         <span>返回首页</span>
@@ -37,15 +38,19 @@
             :key="comp.id"
             type="button"
             class="group relative flex flex-col items-start justify-center rounded-2xl border px-5 py-4 text-left transition-all duration-200"
-            :class="!isExcluded(comp.id)
-              ? 'border-[#5C7F67]/30 bg-[#5C7F67]/10 shadow-sm dark:border-[#5C7F67]/30 dark:bg-[#5C7F67]/20'
-              : 'border-transparent bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700'"
+            :class="
+              !isExcluded(comp.id)
+                ? 'border-[#5C7F67]/30 bg-[#5C7F67]/10 shadow-sm dark:border-[#5C7F67]/30 dark:bg-[#5C7F67]/20'
+                : 'border-transparent bg-stone-100 hover:bg-stone-200 dark:bg-stone-800 dark:hover:bg-stone-700'
+            "
             @click="toggleComponent(comp.id)"
           >
             <!-- 主要标签 -->
             <span
               class="text-base font-bold transition-colors"
-              :class="!isExcluded(comp.id) ? 'text-[#3A5241] dark:text-[#8AB096]' : 'text-stone-400 dark:text-stone-500'"
+              :class="
+                !isExcluded(comp.id) ? 'text-[#3A5241] dark:text-[#8AB096]' : 'text-stone-400 dark:text-stone-500'
+              "
             >
               {{ comp.label }}
             </span>
@@ -54,7 +59,11 @@
             <span
               v-if="comp.desc"
               class="mt-1 text-xs leading-tight font-medium transition-colors"
-              :class="!isExcluded(comp.id) ? 'text-[#5C7F67] opacity-80 dark:text-[#5C7F67]' : 'text-stone-300 dark:text-stone-600'"
+              :class="
+                !isExcluded(comp.id)
+                  ? 'text-[#5C7F67] opacity-80 dark:text-[#5C7F67]'
+                  : 'text-stone-300 dark:text-stone-600'
+              "
             >
               {{ comp.desc }}
             </span>
@@ -148,9 +157,11 @@
                 :key="tag"
                 type="button"
                 class="rounded-full px-4 py-1.5 text-sm font-medium transition-all duration-200"
-                :class="skinConfig.styleKeywords.includes(tag)
-                  ? 'bg-[#5C7F67] text-white shadow-md'
-                  : 'bg-stone-100 text-stone-500 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700'"
+                :class="
+                  skinConfig.styleKeywords.includes(tag)
+                    ? 'bg-[#5C7F67] text-white shadow-md'
+                    : 'bg-stone-100 text-stone-500 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700'
+                "
                 @click="toggleStyleKeyword(tag)"
               >
                 {{ tag }}
@@ -167,9 +178,11 @@
                 :key="tag"
                 type="button"
                 class="rounded-full px-4 py-1.5 text-sm font-medium transition-all duration-200"
-                :class="skinConfig.styleKeywords.includes(tag)
-                  ? 'bg-[#5C7F67] text-white shadow-md'
-                  : 'bg-stone-100 text-stone-500 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700'"
+                :class="
+                  skinConfig.styleKeywords.includes(tag)
+                    ? 'bg-[#5C7F67] text-white shadow-md'
+                    : 'bg-stone-100 text-stone-500 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700'
+                "
                 @click="toggleStyleKeyword(tag)"
               >
                 {{ tag }}
@@ -186,9 +199,11 @@
                 :key="tag"
                 type="button"
                 class="rounded-full px-4 py-1.5 text-sm font-medium transition-all duration-200"
-                :class="skinConfig.styleKeywords.includes(tag)
-                  ? 'bg-[#5C7F67] text-white shadow-md'
-                  : 'bg-stone-100 text-stone-500 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700'"
+                :class="
+                  skinConfig.styleKeywords.includes(tag)
+                    ? 'bg-[#5C7F67] text-white shadow-md'
+                    : 'bg-stone-100 text-stone-500 hover:bg-stone-200 dark:bg-stone-800 dark:text-stone-400 dark:hover:bg-stone-700'
+                "
                 @click="toggleStyleKeyword(tag)"
               >
                 {{ tag }}
@@ -222,24 +237,39 @@
           生成皮肤配置
         </button>
       </div>
-
     </main>
 
     <!-- 确认模态窗 -->
     <Transition name="fade">
-      <div v-if="showConfirmModal" class="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/30 p-6 backdrop-blur-sm" @click.self="showConfirmModal = false">
+      <div
+        v-if="showConfirmModal"
+        class="fixed inset-0 z-50 flex items-center justify-center bg-stone-900/30 p-6 backdrop-blur-sm"
+        @click.self="showConfirmModal = false"
+      >
         <div class="w-full max-w-md rounded-3xl bg-white p-8 shadow-2xl dark:bg-stone-800">
-          <div class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-[#5C7F67]/10 text-2xl text-[#5C7F67]">
+          <div
+            class="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-[#5C7F67]/10 text-2xl text-[#5C7F67]"
+          >
             <i class="fas fa-paper-plane"></i>
           </div>
           <h3 class="mb-2 text-center text-xl font-bold text-stone-800 dark:text-stone-100">准备发送</h3>
           <p class="mb-8 text-center text-stone-600 dark:text-stone-300">
-            建议使用Default预设，关闭无关世界书<br>
+            建议使用Default预设，关闭无关世界书<br />
             否则可能会挤占AI注意力导致效果不佳哦。
           </p>
           <div class="flex gap-4">
-            <button class="flex-1 rounded-full bg-stone-100 py-3 font-bold text-stone-600 hover:bg-stone-200 dark:bg-stone-700 dark:text-stone-300" @click="showConfirmModal = false">取消</button>
-            <button class="flex-1 rounded-full bg-[#5C7F67] py-3 font-bold text-white hover:bg-[#4A6852]" @click="confirmSend">确认发送</button>
+            <button
+              class="flex-1 rounded-full bg-stone-100 py-3 font-bold text-stone-600 hover:bg-stone-200 dark:bg-stone-700 dark:text-stone-300"
+              @click="showConfirmModal = false"
+            >
+              取消
+            </button>
+            <button
+              class="flex-1 rounded-full bg-[#5C7F67] py-3 font-bold text-white hover:bg-[#4A6852]"
+              @click="confirmSend"
+            >
+              确认发送
+            </button>
           </div>
         </div>
       </div>
@@ -273,7 +303,7 @@ const componentOptions = [
   {
     id: 'cover',
     label: '歌曲封面',
-    desc: '每首歌曲单独的封面图，需要在歌单配置中填写封面链接。'
+    desc: '每首歌曲单独的封面图，需要在歌单配置中填写封面链接。',
   },
   { id: 'title', label: '歌曲名' },
   { id: 'artist', label: '歌手名' },
@@ -282,28 +312,22 @@ const componentOptions = [
   {
     id: 'mode',
     label: '播放模式切换',
-    desc: '列表/单曲/随机'
+    desc: '列表/单曲/随机',
   },
   { id: 'volume', label: '音量' },
   { id: 'controls', label: '上一首/下一首' },
   {
     id: 'playlist',
     label: '歌单列表',
-    desc: '查看当前播放的歌单'
+    desc: '查看当前播放的歌单',
   },
 ];
 
 // 视觉基因分类
 const styleGroups = {
-  genre: [
-    '极简主义', '新拟态', '玻璃拟态', '赛博朋克', '蒸汽波', 'Y2K', '像素艺术', '杂志排版'
-  ],
-  texture: [
-    '噪点/颗粒', '扫描线', '半调网点', '纸质', '网格'
-  ],
-  fx: [
-    '色差', '故障艺术', '晕影', '高斯模糊', '倒置/负片', '抖动', '打字机效果'
-  ]
+  genre: ['极简主义', '新拟态', '玻璃拟态', '赛博朋克', '蒸汽波', 'Y2K', '像素艺术', '杂志排版'],
+  texture: ['噪点/颗粒', '扫描线', '半调网点', '纸质', '网格'],
+  fx: ['色差', '故障艺术', '晕影', '高斯模糊', '倒置/负片', '抖动', '打字机效果'],
 };
 
 // Logic

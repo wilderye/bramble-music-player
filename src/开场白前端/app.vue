@@ -1,18 +1,11 @@
 <template>
-  <div class="flex min-h-[600px] w-full flex-col bg-[#FDFCF8] font-sans text-stone-600 transition-colors duration-500 dark:bg-[#1c1917] dark:text-stone-300">
-
+  <div
+    class="flex min-h-[600px] w-full flex-col bg-[#FDFCF8] font-sans text-stone-600 transition-colors duration-500 dark:bg-[#1c1917] dark:text-stone-300"
+  >
     <!-- 页面转场容器 -->
-    <Transition
-      name="page"
-      mode="out-in"
-    >
-    <!-- View 1: 首页 -->
-      <Home
-        v-if="state.currentView === 'home'"
-        key="home"
-        @start="navigate('setup')"
-        @skin="navigate('skin')"
-      />
+    <Transition name="page" mode="out-in">
+      <!-- View 1: 首页 -->
+      <Home v-if="state.currentView === 'home'" key="home" @start="navigate('setup')" @skin="navigate('skin')" />
 
       <!-- View 2: 模式选择 -->
       <Setup
@@ -51,7 +44,6 @@
         @back="navigate('home')"
       />
     </Transition>
-
   </div>
 </template>
 
@@ -153,7 +145,9 @@ const updateDefaultPlaylist = (id: string | null) => {
 /* 页面转场动画：淡入上浮 */
 .page-enter-active,
 .page-leave-active {
-  transition: opacity 0.5s cubic-bezier(0.25, 1, 0.5, 1), transform 0.5s cubic-bezier(0.25, 1, 0.5, 1);
+  transition:
+    opacity 0.5s cubic-bezier(0.25, 1, 0.5, 1),
+    transform 0.5s cubic-bezier(0.25, 1, 0.5, 1);
 }
 
 .page-enter-from {

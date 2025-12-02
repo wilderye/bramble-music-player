@@ -17,7 +17,7 @@
         :class="[
           playlist._uuid === activeUuid
             ? 'bg-white shadow-sm ring-1 ring-gray-200 dark:bg-gray-800 dark:ring-gray-700'
-            : 'hover:bg-gray-200/50 dark:hover:bg-gray-800/50'
+            : 'hover:bg-gray-200/50 dark:hover:bg-gray-800/50',
         ]"
         @click="$emit('select', playlist._uuid)"
       >
@@ -32,9 +32,11 @@
             <i
               class="fas text-xs"
               :class="[
-                playlist.id === defaultPlaylistId ? 'fa-home' :
-                !validationStates[playlist._uuid] ? 'fa-exclamation' :
-                'fa-music'
+                playlist.id === defaultPlaylistId
+                  ? 'fa-home'
+                  : !validationStates[playlist._uuid]
+                    ? 'fa-exclamation'
+                    : 'fa-music',
               ]"
             ></i>
           </div>
@@ -43,7 +45,9 @@
           <div class="flex min-w-0 flex-col">
             <span
               class="truncate text-sm font-medium transition-colors"
-              :class="playlist._uuid === activeUuid ? 'text-gray-900 dark:text-white' : 'text-gray-700 dark:text-gray-300'"
+              :class="
+                playlist._uuid === activeUuid ? 'text-gray-900 dark:text-white' : 'text-gray-700 dark:text-gray-300'
+              "
             >
               {{ playlist.id || '未命名歌单' }}
             </span>
