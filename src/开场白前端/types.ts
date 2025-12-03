@@ -39,7 +39,7 @@ export interface MvuConfigData {
 
 export interface TextConfigData {
   sceneDescription: string;
-  priority: number; 
+  priority: number;
 }
 
 // --- 4. 核心实体 ---

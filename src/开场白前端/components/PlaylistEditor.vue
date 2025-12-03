@@ -138,9 +138,7 @@
             <div v-if="targetType === 'mvu'" class="space-y-8">
               <!-- 优先级 -->
               <div>
-                <label class="mb-3 block text-base font-bold text-stone-700 dark:text-stone-300">
-                  优先级 
-                </label>
+                <label class="mb-3 block text-base font-bold text-stone-700 dark:text-stone-300"> 优先级 </label>
                 <div class="flex items-center gap-4">
                   <input
                     v-model.number="playlist.mvuConfig.priority"
@@ -233,21 +231,17 @@
               </div>
             </div>
 
-<!-- B. Text 模式 -->
+            <!-- B. Text 模式 -->
             <div v-else class="space-y-6">
               <div>
-                <label class="mb-3 block text-lg font-bold text-stone-700 dark:text-stone-200">
-                  优先级
-                </label>
+                <label class="mb-3 block text-lg font-bold text-stone-700 dark:text-stone-200"> 优先级 </label>
                 <div class="flex items-center gap-4">
                   <input
                     v-model.number="playlist.textConfig.priority"
                     type="number"
                     class="w-28 appearance-none rounded-2xl bg-white px-4 py-3 text-center text-lg font-bold text-stone-800 shadow-sm transition-all outline-none focus:ring-2 focus:ring-[#5C7F67]/30 dark:bg-stone-900 dark:text-stone-100"
                   />
-                  <span class="text-base text-stone-500">
-                    场景歌单的优先级。数字越大，优先级越高。
-                  </span>
+                  <span class="text-base text-stone-500"> 场景歌单的优先级。数字越大，优先级越高。 </span>
                 </div>
               </div>
 
