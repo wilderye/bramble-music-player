@@ -1,4 +1,4 @@
-console.log('音乐播放器脚本9.2.3版本');
+console.log('音乐播放器脚本9.4.3版本');
 
 // =================================================================
 // 0. 诊断工具 (Diagnostic Tools)
@@ -3045,7 +3045,8 @@ async function tryInitialize() {
       await initializePlayerForChat(config, authoritativeState);
 
       _registerContextualEventListeners();
-
+      logProbe('【指挥官】正在执行初始化后的 UI 一致性检查...');
+      await _ensureUiVisibility();
       if (_initializationPromiseControls) {
         logProbe('【指挥官】(探针) 后台初始化成功，兑现 Promise 契约，唤醒前端。');
         _initializationPromiseControls.resolve();
@@ -3065,52 +3066,120 @@ async function tryInitialize() {
 }
 
 function _registerMvuEventListeners() {
-  logProbe('[EventDispatcher] 正在注册【运行时】MVU 事件监听器...');
+  logProbe('[EventDispatcher] 正在注册【运行时】MVU 事件监听器 (含同步机制)...');
 
-  const createReconcileHandler = (eventName: string) => {
-    return (eventPayload?: any) => {
-      if (!isMvuIntegrationActive || !isCorePlayerInitialized) {
-        logProbe(`[Gatekeeper] 捕获到MVU事件 (${eventName})，但系统未就绪，已忽略。`, 'warn');
-        return;
+  // 探针: 此状态锁用于防止在等待新消息的MVU更新期间，其他独立的MVU更新事件干扰流程。
+  let isAwaitingUpdateAfterMessage = false;
+
+  // 1. 全局被动监听器
+  //    职责: 处理并非由新消息生成触发的变量更新 (例如，用户通过斜杠命令手动修改变量)。
+  eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, (eventPayload?: any) => {
+    if (!isMvuIntegrationActive || !isCorePlayerInitialized) return;
+
+    // 如果同步机制正在运行，则此事件由同步机制内部处理，全局监听器应忽略它。
+    if (isAwaitingUpdateAfterMessage) {
+      logProbe('[Event-MVU] 捕获到独立的更新事件，但因同步机制正在运行而被忽略。');
+      return;
+    }
+
+    logProbe(`[Event-MVU] 捕获到独立的更新事件，触发常规校准...`);
+    void _reconcilePlaylistQueue(eventPayload);
+  });
+
+  // 2. 新消息同步机制
+  //    职责: 当新消息到达时，确保我们先等到了对应的变量更新，再执行校准和UI注入。
+  eventOn(tavern_events.MESSAGE_RECEIVED, async (id: number) => {
+    if (!isScriptActive) return;
+    logProbe(`[Event-MVU] 捕获到新消息 (id: ${id})。启动MVU同步流程...`);
+
+    isAwaitingUpdateAfterMessage = true; // 上锁，挂起全局监听
+    let processHasFinished = false; // 内部锁，防止事件和超时都执行
+    const SYNC_TIMEOUT_MS = 1500; // 等待MVU更新的超时时间 (1.5秒)
+
+    // 用于持有临时监听器的句柄，以便后续可以精确地移除它。
+    let stopListenerHandle: { stop: () => void } | undefined;
+
+    try {
+      // --- 准备两个并行的Promise任务 ---
+
+      // 任务A: 等待 MVU 完成更新的事件
+      const mvuEventPromise = new Promise<{ winner: 'event'; payload: any }>(resolve => {
+        const handler = (payload: any) => {
+          if (processHasFinished) return;
+          logProbe('[Sync] 探针: MVU更新事件在超时前到达。');
+          resolve({ winner: 'event', payload });
+        };
+        // 注册一个一次性的监听器
+        stopListenerHandle = eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, handler);
+      });
+
+      // 任务B: 启动一个超时计时器
+      const timeoutPromise = new Promise<{ winner: 'timeout'; payload: undefined }>(resolve => {
+        setTimeout(() => {
+          if (processHasFinished) return;
+          logProbe(`[Sync] 探针: 等待 ${SYNC_TIMEOUT_MS}ms 后MVU仍未响应，触发超时。`, 'warn');
+          resolve({ winner: 'timeout', payload: undefined });
+        }, SYNC_TIMEOUT_MS);
+      });
+
+      // --- 开始执行，等待其中一个任务完成 ---
+      const result = await Promise.race([mvuEventPromise, timeoutPromise]);
+      processHasFinished = true; // 锁定结果，防止另一个任务再执行
+
+      // --- 根据结果执行后续操作 ---
+      if (result.winner === 'event') {
+        // MVU正常工作，使用它提供的精确数据进行校准
+        logProbe('[Sync] 流程决策: 使用事件数据进行精确校准。');
+        await _reconcilePlaylistQueue(result.payload);
+      } else {
+        // MVU超时或出错，我们不等了，主动去查询当前最新状态作为兜底
+        logProbe('[Sync] 流程决策: 执行强制兜底校准 (主动查询最新状态)。');
+        await _reconcilePlaylistQueue(undefined);
       }
-      logProbe(`[Event] 捕获到MVU事件: ${eventName}，即将唤醒校准官...`);
-      // (SSoT原则) 将事件载荷这个“事实”直接传递给校准官
-      void _reconcilePlaylistQueue(eventPayload);
-    };
-  };
 
-  eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, createReconcileHandler('VARIABLE_UPDATE_ENDED'));
-
-  // [已移除] MESSAGE_DELETED 已移动至 _registerContextualEventListeners 以实现通用支持
+      // --- 最终步骤: 注入UI ---
+      // 此时，无论上面走了哪条路，我们的内部状态都已经是最新了，可以安全地注入UI。
+      logProbe('[Sync] 状态已同步，执行UI注入。');
+      await _handleNewAssistantMessage(id);
+    } catch (e) {
+      logProbe(`[Sync] 同步流程中发生意外错误: ${e}`, 'error');
+      // 即使流程出错，也要尽力尝试注入UI，保证界面可用性。
+      await _handleNewAssistantMessage(id);
+    } finally {
+      // 无论成功还是失败，都必须清理资源。
+      if (stopListenerHandle) {
+        stopListenerHandle.stop(); // 移除临时监听器，防止内存泄漏。
+        logProbe('[Sync] 探针: 临时事件监听器已清理。');
+      }
+      isAwaitingUpdateAfterMessage = false; // 解锁，恢复全局监听
+    }
+  });
 
   logProbe('[EventDispatcher] MVU监听器部署完毕。');
 }
 
-/**
- * 注册纯文字模式 ("吟游诗人") 专属的事件监听器。
- * 职责: 监听文本变动事件，并直接呼叫校准官。
- */
 function _registerTextEventListeners() {
   logProbe('[EventDispatcher] 正在注册【吟游诗人】文本模式事件监听器...', 'group');
 
-  // 1. 监听 AI 生成完毕 (MESSAGE_RECEIVED)
-  eventOn(tavern_events.MESSAGE_RECEIVED, (id: number) => {
+  //为 MESSAGE_RECEIVED 事件建立一个原子的“校准-注入”流程。
+  eventOn(tavern_events.MESSAGE_RECEIVED, async (id: number) => {
     if (!isScriptActive) return;
 
-    logProbe(`[Event] 文本模式捕获到 MESSAGE_RECEIVED (id: ${id})，触发校准...`);
-    void _reconcilePlaylistQueue(undefined);
-  });
+    logProbe(`[Event-Text] 捕获到新消息 (id: ${id})。启动“校准-注入”原子流程...`);
 
-  // 2. 监听 用户编辑消息 (MESSAGE_EDITED)
-  eventOn(tavern_events.MESSAGE_EDITED, async (id: number) => {
-    if (!isScriptActive) return;
-
-    logProbe(`[Event] 文本模式捕获到 MESSAGE_EDITED (id: ${id})，触发校准与UI补救...`);
-
-    // 第一步：校准播放队列（听觉层）
+    // 步骤一: 等待校准完成。
     await _reconcilePlaylistQueue(undefined);
 
-    // 第二步：如果校准后队列有歌单，确保 UI 标签存在（视觉层）
+    // 步骤二: 在校准完成后，根据最新的内部状态来决定是否注入UI。
+    logProbe(`[Event-Text] 校准完成，尝试执行注入...`);
+    await _handleNewAssistantMessage(id);
+  });
+
+  // 监听用户编辑消息的逻辑保持不变，它已经遵循了正确的“校准后更新UI”的模式。
+  eventOn(tavern_events.MESSAGE_EDITED, async (id: number) => {
+    if (!isScriptActive) return;
+    logProbe(`[Event] 文本模式捕获到 MESSAGE_EDITED (id: ${id})，触发校准与UI补救...`);
+    await _reconcilePlaylistQueue(undefined);
     await _ensureUiVisibility();
   });
 
@@ -3143,12 +3212,11 @@ async function _handleHistoryChangeEvent(eventName: string, options?: { transiti
 }
 
 /**
- * [V9.9 核心修正] 处理新AI消息渲染事件的专用处理器。
- * (SRP: Single Responsibility Principle)
+ * 处理新AI消息渲染事件的专用处理器。
  * @param messageId - 由事件传来的消息ID。
  */
 async function _handleNewAssistantMessage(messageId: number): Promise<void> {
-  logProbe(`[Injector] 捕获到 CHARACTER_MESSAGE_RENDERED 事件，message_id: ${messageId}`);
+  logProbe(`[Injector] 收到 UI 注入请求，目标 message_id: ${messageId}`);
 
   if (messageId === 0) {
     logProbe(`[Injector] (探针) 操作中止：message_id 为 0 (开场白)，权限属于作者，无需注入。`);
@@ -3180,7 +3248,7 @@ async function _handleNewAssistantMessage(messageId: number): Promise<void> {
 }
 
 /**
- * [V9.95 新增] UI 可见性卫士。
+ * UI 可见性卫士。
  * 职责：在 MVU 延迟加载或消息删除后，确保如果音乐在播放，界面一定存在。
  * 原则：SSoT (以队列状态为准), 鲁棒性 (补救缺失的 UI)
  */
@@ -3330,10 +3398,10 @@ function _isSwipeContentReady(messageId: number): boolean {
 function _registerContextualEventListeners() {
   logProbe('[EventDispatcher] 正在注册“上下文专属”事件监听器...');
 
-  eventOn(tavern_events.CHARACTER_MESSAGE_RENDERED, (id: number) => {
-    if (!isScriptActive) return;
-    void _handleNewAssistantMessage(id);
-  });
+  // [V9.6 修复] 移除 CHARACTER_MESSAGE_RENDERED 监听器。
+  // 它的主要问题是：当切换聊天时，酒馆会重新渲染历史消息，导致此事件被触发。
+  // 此时脚本内存中还是上一个聊天的状态，因此会错误地将播放器界面注入到新聊天中 (幽灵注入问题)。
+  // 我们将在后续阶段使用更精确的事件 (MESSAGE_RECEIVED) 来处理新消息。
 
   eventOn(tavern_events.MESSAGE_DELETED, (deletedId: number) => {
     if (!isScriptActive) return;
