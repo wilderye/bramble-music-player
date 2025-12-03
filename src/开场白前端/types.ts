@@ -33,12 +33,13 @@ export interface MvuCondition {
 export interface MvuConfigData {
   type: MvuPlaylistType;
   priority: number;
-  initVarRaw: string; // [新增] 用于 Prompt 参考
+  initVarRaw: string;
   conditions: MvuCondition[];
 }
 
 export interface TextConfigData {
   sceneDescription: string;
+  priority: number; 
 }
 
 // --- 4. 核心实体 ---

@@ -135,6 +135,11 @@ export function generatePrompt(state: ProjectState): string {
       } else {
         // 文字模式: 输出情景描述
         body += `\n[情景描述]\n`;
+
+        // [新增] 输出优先级 (如果旧存档没有优先级，默认为 10)
+        const prio = p.textConfig.priority ?? 10;
+        body += `优先级: ${prio}\n`;
+
         body += (p.textConfig.sceneDescription || '').trim() + `\n`;
       }
     } else {

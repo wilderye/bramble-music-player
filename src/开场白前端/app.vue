@@ -121,9 +121,8 @@ const createPlaylist = () => {
     trackInputMode: 'raw',
     tracksRaw: '',
     tracksStructured: [],
-    // 默认类型修正为 'base'
     mvuConfig: { type: 'base', priority: 10, initVarRaw: '', conditions: [] },
-    textConfig: { sceneDescription: '' },
+    textConfig: { sceneDescription: '', priority: 10 },
   };
   state.playlists.push(newPlaylist);
 };
