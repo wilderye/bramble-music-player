@@ -1,4 +1,4 @@
-console.log('音乐播放器脚本9.4.3版本');
+console.log('音乐播放器脚本9.4.4版本');
 
 // =================================================================
 // 0. 诊断工具 (Diagnostic Tools)
@@ -1314,6 +1314,7 @@ const STATE_KEY = '余烬双星_播放器状态';
 
 let isInitializedForThisChat = false;
 let isReconciling = false;
+let _initializationResult: { success: boolean; error?: string } | null = null;
 let _initializationPromiseControls: { resolve: () => void; reject: (reason?: any) => void } | null = null;
 
 let _initializationPromise: Promise<void> | null = null;
@@ -1331,7 +1332,7 @@ const fullStateUpdateCallbacks: ((payload: FullStatePayload) => void)[] = [];
 const timeUpdateCallbacks: ((payload: TimeUpdatePayload) => void)[] = [];
 
 /**
- * [V9.5 统一校准官] 新架构的“运行时大脑”。
+ * 新架构的“运行时大脑”。
  * 它的单一职责是：响应“运行时”的增量事件，通过“边沿检测”模型，
  * 精确地、最小化地修改当前队列，并决策是否需要变更播放。
  * @param eventPayload - 可选的、来自 MVU 事件的最新状态数据。
@@ -2087,7 +2088,7 @@ async function initializePlayerForChat(
   authoritativeState: any,
   options?: { autoPlayIfWasPlaying?: boolean },
 ) {
-  logProbe('=== 开始执行【核心·自愈式初始化】 V9.0 ===', 'group');
+  logProbe('=== 开始执行【核心·自愈式初始化】 ===', 'group');
   try {
     // --- 【准备阶段】 清理与重置 ---
     isCorePlayerInitialized = true;
@@ -2846,19 +2847,32 @@ function playPrev() {
 function setupGlobalAPI() {
   window.musicPlayerAPI = {
     requestInitialization: (): Promise<void> => {
-      // 移除 isInitializedForThisChat 检查。
-      // 无论是首次加载还是后续重连，我们都强制前端等待同一个 Promise 契约的结果。
+      // [修复] 时序竞态保护逻辑 V2.0
+      // 场景 A: 后台跑得太快，已经初始化完了 (Cache Hit)
+      if (_initializationResult) {
+        if (_initializationResult.success) {
+          logProbe('[API] requestInitialization (缓存命中): 后台已就绪，立即返回成功信号。', 'log');
+          return Promise.resolve();
+        } else {
+          logProbe(
+            `[API] requestInitialization (缓存命中): 后台初始化曾失败，返回错误: ${_initializationResult.error}`,
+            'error',
+          );
+          return Promise.reject(new Error(_initializationResult.error));
+        }
+      }
 
+      // 场景 B: 后台还在忙，或者还没开始 (Wait)
       if (!_initializationPromise) {
         logProbe(
-          '[API] requestInitialization (创建): 收到首个请求，正在创建唯一的 Promise 契约 (状态: Pending)...',
+          '[API] requestInitialization (创建): 收到首个请求且无缓存，正在创建唯一的 Promise 契约 (状态: Pending)...',
           'warn',
         );
         _initializationPromise = new Promise((resolve, reject) => {
           _initializationPromiseControls = { resolve, reject };
         });
       } else {
-        logProbe('[API] requestInitialization (复用): 收到后续请求，返回已存在的 Promise 契约。');
+        logProbe('[API] requestInitialization (复用): 收到后续请求，返回已存在的 Promise 契约 (仍在等待后台)。');
       }
 
       return _initializationPromise;
@@ -2995,7 +3009,7 @@ async function tryInitialize() {
     isInitializedForThisChat = true;
     _currentChatId = currentChatId;
 
-    logProbe(`【初始化指挥官 V9.8】锁定ID: ${_currentChatId}，开始执行“分流-等待-执行”协议...`, 'group');
+    logProbe(`【初始化】锁定ID: ${_currentChatId}，开始执行“分流-等待-执行”协议...`, 'group');
 
     try {
       // --- 步骤一：检测 (Detect) ---
@@ -3047,115 +3061,60 @@ async function tryInitialize() {
       _registerContextualEventListeners();
       logProbe('【指挥官】正在执行初始化后的 UI 一致性检查...');
       await _ensureUiVisibility();
+
+      _initializationResult = { success: true };
+
       if (_initializationPromiseControls) {
         logProbe('【指挥官】(探针) 后台初始化成功，兑现 Promise 契约，唤醒前端。');
         _initializationPromiseControls.resolve();
+      } else {
+        logProbe('【指挥官】(探针) 后台初始化成功，已写入缓存。前端尚未建立连接，等待其后续拉取。');
       }
     } catch (error) {
       logProbe(`【指挥官】在初始化主流程中发生严重错误: ${error}`, 'error');
-      // 如果发生任何错误，都要通知前端，让它显示错误信息
+
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      _initializationResult = { success: false, error: errorMessage };
+
       if (_initializationPromiseControls) {
-        const errorMessage = error instanceof Error ? error.message : String(error);
         _initializationPromiseControls.reject(errorMessage);
+      } else {
+        logProbe('【指挥官】(探针) 初始化失败，已写入错误缓存。前端尚未建立连接。');
       }
     } finally {
       _initializationPromiseControls = null;
-      logProbe('【初始化指挥官 V9.8】协议执行完毕。', 'groupEnd');
+      logProbe('【初始化指挥官 】协议执行完毕。', 'groupEnd');
     }
   }
 }
 
 function _registerMvuEventListeners() {
-  logProbe('[EventDispatcher] 正在注册【运行时】MVU 事件监听器 (含同步机制)...');
+  logProbe('[EventDispatcher] 正在注册【运行时】MVU 事件监听器 (极简响应模式 V2)...', 'group');
 
-  // 探针: 此状态锁用于防止在等待新消息的MVU更新期间，其他独立的MVU更新事件干扰流程。
-  let isAwaitingUpdateAfterMessage = false;
-
-  // 1. 全局被动监听器
-  //    职责: 处理并非由新消息生成触发的变量更新 (例如，用户通过斜杠命令手动修改变量)。
+  // 1. 变量更新监听器 (负责核心校准)
+  // 职责: 一旦 MVU (通过 Function Calling) 更新了变量，立即调整播放队列。
   eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, (eventPayload?: any) => {
     if (!isMvuIntegrationActive || !isCorePlayerInitialized) return;
 
-    // 如果同步机制正在运行，则此事件由同步机制内部处理，全局监听器应忽略它。
-    if (isAwaitingUpdateAfterMessage) {
-      logProbe('[Event-MVU] 捕获到独立的更新事件，但因同步机制正在运行而被忽略。');
-      return;
-    }
+    logProbe(`[Event-MVU] 捕获到变量更新事件 (Payload: ${eventPayload ? '有' : '无'})，触发即时校准...`);
 
-    logProbe(`[Event-MVU] 捕获到独立的更新事件，触发常规校准...`);
     void _reconcilePlaylistQueue(eventPayload);
   });
 
-  // 2. 新消息同步机制
-  //    职责: 当新消息到达时，确保我们先等到了对应的变量更新，再执行校准和UI注入。
+  // 2. 消息接收监听器 (负责 UI 注入与兜底)
   eventOn(tavern_events.MESSAGE_RECEIVED, async (id: number) => {
     if (!isScriptActive) return;
-    logProbe(`[Event-MVU] 捕获到新消息 (id: ${id})。启动MVU同步流程...`);
+    logProbe(`[Event-MVU] 捕获到新消息 (id: ${id})。启动注入流程...`);
 
-    isAwaitingUpdateAfterMessage = true; // 上锁，挂起全局监听
-    let processHasFinished = false; // 内部锁，防止事件和超时都执行
-    const SYNC_TIMEOUT_MS = 1500; // 等待MVU更新的超时时间 (1.5秒)
+    // [兜底校准]
+    await _reconcilePlaylistQueue(undefined);
 
-    // 用于持有临时监听器的句柄，以便后续可以精确地移除它。
-    let stopListenerHandle: { stop: () => void } | undefined;
-
-    try {
-      // --- 准备两个并行的Promise任务 ---
-
-      // 任务A: 等待 MVU 完成更新的事件
-      const mvuEventPromise = new Promise<{ winner: 'event'; payload: any }>(resolve => {
-        const handler = (payload: any) => {
-          if (processHasFinished) return;
-          logProbe('[Sync] 探针: MVU更新事件在超时前到达。');
-          resolve({ winner: 'event', payload });
-        };
-        // 注册一个一次性的监听器
-        stopListenerHandle = eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, handler);
-      });
-
-      // 任务B: 启动一个超时计时器
-      const timeoutPromise = new Promise<{ winner: 'timeout'; payload: undefined }>(resolve => {
-        setTimeout(() => {
-          if (processHasFinished) return;
-          logProbe(`[Sync] 探针: 等待 ${SYNC_TIMEOUT_MS}ms 后MVU仍未响应，触发超时。`, 'warn');
-          resolve({ winner: 'timeout', payload: undefined });
-        }, SYNC_TIMEOUT_MS);
-      });
-
-      // --- 开始执行，等待其中一个任务完成 ---
-      const result = await Promise.race([mvuEventPromise, timeoutPromise]);
-      processHasFinished = true; // 锁定结果，防止另一个任务再执行
-
-      // --- 根据结果执行后续操作 ---
-      if (result.winner === 'event') {
-        // MVU正常工作，使用它提供的精确数据进行校准
-        logProbe('[Sync] 流程决策: 使用事件数据进行精确校准。');
-        await _reconcilePlaylistQueue(result.payload);
-      } else {
-        // MVU超时或出错，我们不等了，主动去查询当前最新状态作为兜底
-        logProbe('[Sync] 流程决策: 执行强制兜底校准 (主动查询最新状态)。');
-        await _reconcilePlaylistQueue(undefined);
-      }
-
-      // --- 最终步骤: 注入UI ---
-      // 此时，无论上面走了哪条路，我们的内部状态都已经是最新了，可以安全地注入UI。
-      logProbe('[Sync] 状态已同步，执行UI注入。');
-      await _handleNewAssistantMessage(id);
-    } catch (e) {
-      logProbe(`[Sync] 同步流程中发生意外错误: ${e}`, 'error');
-      // 即使流程出错，也要尽力尝试注入UI，保证界面可用性。
-      await _handleNewAssistantMessage(id);
-    } finally {
-      // 无论成功还是失败，都必须清理资源。
-      if (stopListenerHandle) {
-        stopListenerHandle.stop(); // 移除临时监听器，防止内存泄漏。
-        logProbe('[Sync] 探针: 临时事件监听器已清理。');
-      }
-      isAwaitingUpdateAfterMessage = false; // 解锁，恢复全局监听
-    }
+    // [UI 注入]
+    logProbe('[Event-MVU] 状态确认完毕，执行 UI 注入。');
+    await _handleNewAssistantMessage(id);
   });
 
-  logProbe('[EventDispatcher] MVU监听器部署完毕。');
+  logProbe('[EventDispatcher] MVU 监听器部署完毕 。', 'groupEnd');
 }
 
 function _registerTextEventListeners() {
@@ -3521,10 +3480,16 @@ $(() => {
   setTimeout(() => {
     if (!isInitializedForThisChat) {
       clearInterval(observerInterval);
-      logProbe('【观察者模型】初始化超时！', 'error');
+
+      // 这里使用和前端一模一样的中文文案，确保用户体验一致
+      const timeoutMsg = '后台脚本初始化超时。如果这是您第一次加载角色卡，请尝试刷新页面。';
+
+      logProbe(`【观察者模型】初始化超时！`, 'error');
+
+      _initializationResult = { success: false, error: timeoutMsg };
 
       if (_initializationPromiseControls) {
-        _initializationPromiseControls.reject('Initialization timed out after 10 seconds.');
+        _initializationPromiseControls.reject(timeoutMsg);
         _initializationPromiseControls = null;
       }
     }
