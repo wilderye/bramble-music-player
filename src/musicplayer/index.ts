@@ -2846,19 +2846,19 @@ function playPrev() {
 function setupGlobalAPI() {
   window.musicPlayerAPI = {
     requestInitialization: (): Promise<void> => {
-      if (isInitializedForThisChat) {
-        logProbe('[API] requestInitialization (已完成): 一个迟到的界面发来请求，立即返回成功契约。');
-        broadcastFullState();
-        return Promise.resolve();
-      }
+      // 移除 isInitializedForThisChat 检查。
+      // 无论是首次加载还是后续重连，我们都强制前端等待同一个 Promise 契约的结果。
 
       if (!_initializationPromise) {
-        logProbe('[API] requestInitialization (首次): 第一个界面请求到达，正在创建【共享的】Promise契约...');
+        logProbe(
+          '[API] requestInitialization (创建): 收到首个请求，正在创建唯一的 Promise 契约 (状态: Pending)...',
+          'warn',
+        );
         _initializationPromise = new Promise((resolve, reject) => {
           _initializationPromiseControls = { resolve, reject };
         });
       } else {
-        logProbe('[API] requestInitialization (后续): 又一个界面请求到达，返回【已存在的】共享契约。');
+        logProbe('[API] requestInitialization (复用): 收到后续请求，返回已存在的 Promise 契约。');
       }
 
       return _initializationPromise;
