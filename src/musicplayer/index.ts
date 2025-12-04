@@ -1,4 +1,4 @@
-console.log('音乐播放器脚本9.4.4版本');
+console.log('音乐播放器脚本9.4.6版本');
 
 // =================================================================
 // 0. 诊断工具 (Diagnostic Tools)
@@ -3088,33 +3088,66 @@ async function tryInitialize() {
   }
 }
 
-function _registerMvuEventListeners() {
-  logProbe('[EventDispatcher] 正在注册【运行时】MVU 事件监听器 (极简响应模式 V2)...', 'group');
+/**
+ * MVU 哨兵探测器
+ * 职责: 轮询检测 MVU 的 <StatusPlaceHolderImpl/> 标签，作为“MVU已接管本楼层”的信号。
+ * @param messageId - 目标消息ID
+ * @returns Promise<boolean> - true 表示发现哨兵，false 表示超时未发现
+ */
+async function _waitForMvuSentinel(messageId: number): Promise<boolean> {
+  const POLLING_INTERVAL = 100; // 100ms
+  const MAX_ATTEMPTS = 15; // 1.5秒超时 (放宽一点以适应稍慢的设备)
 
-  // 1. 变量更新监听器 (负责核心校准)
-  // 职责: 一旦 MVU (通过 Function Calling) 更新了变量，立即调整播放队列。
-  eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, (eventPayload?: any) => {
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    const msgs = getChatMessages(messageId);
+    if (msgs && msgs.length > 0) {
+      const content = msgs[0].message;
+      if (typeof content === 'string' && content.includes('<StatusPlaceHolderImpl/>')) {
+        logProbe(`[Sentinel] 在第 ${i + 1} 次轮询中发现 MVU 哨兵标签。`);
+        return true;
+      }
+    }
+    await new Promise(resolve => setTimeout(resolve, POLLING_INTERVAL));
+  }
+
+  logProbe(`[Sentinel] 轮询超时，未发现 MVU 哨兵标签 (可能是Extra模式或MVU未响应)。`);
+  return false;
+}
+
+function _registerMvuEventListeners() {
+  logProbe('[EventDispatcher] 正在注册【运行时】MVU 事件监听器 (哨兵模式 V3)...', 'group');
+
+  // 1. 变量更新监听器 (负责核心校准 + 覆写补救)
+  eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, async (eventPayload?: any) => {
     if (!isMvuIntegrationActive || !isCorePlayerInitialized) return;
 
-    logProbe(`[Event-MVU] 捕获到变量更新事件 (Payload: ${eventPayload ? '有' : '无'})，触发即时校准...`);
+    logProbe(`[Event-MVU] 捕获到变量更新事件 (Payload: ${eventPayload ? '有' : '无'})。`);
 
-    void _reconcilePlaylistQueue(eventPayload);
+    // 步骤 A: 校准队列
+    await _reconcilePlaylistQueue(eventPayload);
+
+    // 步骤 B: 补救 UI
+    logProbe(`[Event-MVU] 变量更新完毕，执行抗覆写 UI 检查...`);
+    await _ensureUiVisibility();
   });
 
-  // 2. 消息接收监听器 (负责 UI 注入与兜底)
+  // 2. 消息接收监听器
   eventOn(tavern_events.MESSAGE_RECEIVED, async (id: number) => {
     if (!isScriptActive) return;
-    logProbe(`[Event-MVU] 捕获到新消息 (id: ${id})。启动注入流程...`);
+    logProbe(`[Event-MVU] 捕获到新消息 (id: ${id})。启动哨兵探测流程...`);
 
-    // [兜底校准]
+    // 步骤 A: 哨兵轮询
+    await _waitForMvuSentinel(id);
+
+    // 步骤 B: 兜底校准
     await _reconcilePlaylistQueue(undefined);
 
-    // [UI 注入]
-    logProbe('[Event-MVU] 状态确认完毕，执行 UI 注入。');
+    // 步骤 C: UI 注入
+    logProbe('[Event-MVU] 哨兵流程结束，执行 UI 注入尝试。');
     await _handleNewAssistantMessage(id);
   });
 
-  logProbe('[EventDispatcher] MVU 监听器部署完毕 。', 'groupEnd');
+  logProbe('[EventDispatcher] MVU 监听器部署完毕。', 'groupEnd');
 }
 
 function _registerTextEventListeners() {
