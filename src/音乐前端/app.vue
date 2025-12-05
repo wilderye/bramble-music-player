@@ -14,14 +14,16 @@
         <!-- "Aria Pod" 主界面 -->
         <div v-if="!initializationError" class="player-main">
           <!-- 1. 当前曲目区 (Track Info) -->
-          <div class="track-info">
+<div class="track-info">
             <img v-if="currentItem?.cover" :src="currentItem.cover" alt="封面" class="cover-art" />
             <div v-else class="cover-art cover-art-placeholder">
               <i class="fa-solid fa-music"></i>
             </div>
             <div class="details">
-              <p class="title" :title="currentItem?.title">{{ currentItem?.title || '歌单未配置' }}</p>
-              <p class="artist" :title="currentItem?.artist">{{ currentItem?.artist || '未知艺术家' }}</p>
+              <!-- 修改点 1：如果没有歌名，显示 'END' -->
+              <p class="title" :title="currentItem?.title">{{ currentItem?.title || 'END' }}</p>
+              <!-- 修改点 2：如果没有歌手，显示空字符串（即什么都不显示） -->
+              <p class="artist" :title="currentItem?.artist">{{ currentItem?.artist || '' }}</p>
             </div>
           </div>
 
