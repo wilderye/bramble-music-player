@@ -22,8 +22,9 @@ const COMPONENT_MAP: Record<string, string> = {
  */
 export function generateSkinPrompt(config: SkinConfig): string {
   // 1. 基础指令
-  let prompt = '请为我编写一个 SillyTavern 的前端播放器界面 (HTML/CSS/JS)。\n';
-  prompt += '严格基于 <MUSICPLAYER_FRONTEND_DEV> 开发规范，产出完整的代码块。\n\n';
+  let prompt = '请为我编写一个 SillyTavern 的前端播放器界面。\n';
+  prompt +=
+    '严格基于 <MUSICPLAYER_FRONTEND_DEV> 开发规范，产出完整的代码块 `<html>` 结构，包含 `<head>` 和 `<body>`。\n\n';
 
   // 2. 组件删减 (只列出用户【不需要】的)
   if (config.excludedComponents.length > 0) {
