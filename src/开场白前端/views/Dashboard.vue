@@ -232,7 +232,8 @@
             <!-- 提示文本 (主要内容) -->
             <p class="mb-8 text-base leading-relaxed text-stone-600 dark:text-stone-300">
               💡 建议使用
-              <span class="font-bold text-[#5C7F67]">Default</span> 预设，关掉不相关的世界书，并把黑棘世界书中含[🌲前端]的条目全部关闭。
+              <span class="font-bold text-[#5C7F67]">Default</span>
+              预设，关掉不相关的世界书，并把黑棘世界书中含[🌲前端]的条目全部关闭。
             </p>
 
             <!-- 按钮组 -->
