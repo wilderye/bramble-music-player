@@ -255,7 +255,7 @@
           <h3 class="mb-2 text-center text-xl font-bold text-stone-800 dark:text-stone-100">准备发送</h3>
           <p class="mb-8 text-center text-stone-600 dark:text-stone-300">
             建议使用Default预设，关闭无关世界书<br />
-            否则可能会挤占AI注意力导致效果不佳哦。
+            把黑棘世界书中含[🍳歌单]的条目全部关闭。
           </p>
           <div class="flex gap-4">
             <button
