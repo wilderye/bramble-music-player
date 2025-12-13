@@ -1,4 +1,4 @@
-console.log('音乐播放器脚本9.4.6版本');
+console.log('音乐播放器脚本9.4.7版本');
 
 // =================================================================
 // 0. 诊断工具 (Diagnostic Tools)
@@ -1312,12 +1312,37 @@ const StrategyManager = (() => {
 
 const STATE_KEY = '余烬双星_播放器状态';
 
-let isInitializedForThisChat = false;
-let isReconciling = false;
+
+let isInitializedForThisChat = false; // 最终成功标记
+let isReconciling = false; // 运行时校准锁
+
+// 初始化流程专用控制变量
+let _initObserverTimer: number | null = null; // 轮询定时器
+let _initTimeoutTimer: number | null = null; // 兜底定时器
+let _isInitChecking = false; // 忙碌锁 (Busy Flag)
+
+// Promise 契约 (保持不变，用于前端等待)
 let _initializationResult: { success: boolean; error?: string } | null = null;
 let _initializationPromiseControls: { resolve: () => void; reject: (reason?: any) => void } | null = null;
-
 let _initializationPromise: Promise<void> | null = null;
+
+/**
+ * 职责 (SRP): 立即停止所有与初始化相关的定时器，确保状态互斥。
+ * 它可以安全地被多次调用。
+ */
+function stopInitializationTimers() {
+  if (_initObserverTimer !== null) {
+    clearInterval(_initObserverTimer);
+    _initObserverTimer = null;
+    logProbe('[Init-Infra] 轮询定时器已解除。');
+  }
+  if (_initTimeoutTimer !== null) {
+    clearTimeout(_initTimeoutTimer);
+    _initTimeoutTimer = null;
+    logProbe('[Init-Infra] 兜底超时定时器已解除。');
+  }
+  _isInitChecking = false; // 强制释放锁
+}
 let isScriptActive = true;
 let allPlaylists: Record<string, PlaylistConfig> = {};
 let triggers: z.infer<typeof ZodTriggerConfig>[] = [];
@@ -2999,24 +3024,28 @@ function executeHardReset() {
   reloadIframe();
 }
 
-async function tryInitialize() {
+/**
+ * 注意：此函数不再负责检查世界书是否存在，它假设调用者（门卫）已经确认数据就绪。
+ */
+async function _executeCoreInitialization() {
+  // 再次检查防止重复执行 (双重保险)
   if (isInitializedForThisChat) return;
 
   const currentChatId = SillyTavern.getCurrentChatId ? SillyTavern.getCurrentChatId() : null;
-
   if (SillyTavern.chat.length > 0 && currentChatId !== null) {
-    // [原则: SRP] isInitializedForThisChat 标志现在是这个函数的“守卫”，确保初始化只执行一次。
     isInitializedForThisChat = true;
     _currentChatId = currentChatId;
 
-    logProbe(`【初始化】锁定ID: ${_currentChatId}，开始执行“分流-等待-执行”协议...`, 'group');
+    logProbe(`【指挥官】锁定ID: ${_currentChatId}，门卫已放行，开始执行核心初始化业务...`, 'group');
 
     try {
-      // --- 步骤一：检测 (Detect) ---
-      // [原则: SSoT] 初始化流程的第一个动作，就是获取“世界书”这个唯一事实来源。
+      // --- 步骤一：解析配置 (Detect) ---
+      // 此时 parseWorldbookConfig 应该能 100% 成功，因为门卫已经确认了数据存在
       const config = await parseWorldbookConfig();
+
+      // 如果解析失败(例如格式错误)，这里依然会抛出异常中断流程
       if (!config) {
-        throw new Error('无法解析世界书配置，初始化中止。');
+        throw new Error('世界书配置解析失败 (格式错误或校验未通过)。');
       }
 
       const isMvuCard = config.isMvu;
@@ -3025,8 +3054,6 @@ async function tryInitialize() {
       // --- 步骤二：分流 (Branch) & 等待 (Wait) ---
       if (isMvuCard) {
         logProbe('【指挥官】(路径选择) 检测到MVU卡，进入“安全路径”，开始等待MVU就绪...');
-        // [原则: CQS] _waitForMvuGenesis 是一个“查询”，它询问外部环境状态，直到满足条件。
-        // 注意: MVU 模式的事件注册 (_registerMvuEventListeners) 是在 _waitForMvuGenesis 内部成功后触发的
         const mvuIsReady = await _waitForMvuGenesis();
         if (!mvuIsReady) {
           throw new Error('MVU集成初始化失败或超时，部分功能将不可用。');
@@ -3038,28 +3065,22 @@ async function tryInitialize() {
       }
 
       // --- 步骤三：执行 (Execute) ---
-      logProbe('【指挥官】所有前置条件满足，开始执行播放器核心初始化...');
+      logProbe('【指挥官】所有前置条件满足，开始加载播放器状态...');
 
       let authoritativeState = null;
       if (isMvuCard) {
-        logProbe('【指挥官】(查询) 正在为MVU卡查找权威状态...');
         authoritativeState = await _findLatestAuthoritativeMvuState();
       } else {
-        logProbe('【指挥官】(执行) 纯文字卡，正在查找最新的文本标签状态...');
         const textResult = await TextTagManager.getLatestState();
-
-        //构造统一的权威状态对象 (Unified Authority Object)
         authoritativeState = {
           mvuData: { stat_data: textResult.tags },
           messageId: textResult.foundAtMessageId,
         };
-        logProbe(`【指挥官】文本状态获取完成 (Anchor ID: ${textResult.foundAtMessageId})。`);
       }
 
       await initializePlayerForChat(config, authoritativeState);
 
       _registerContextualEventListeners();
-      logProbe('【指挥官】正在执行初始化后的 UI 一致性检查...');
       await _ensureUiVisibility();
 
       _initializationResult = { success: true };
@@ -3067,25 +3088,116 @@ async function tryInitialize() {
       if (_initializationPromiseControls) {
         logProbe('【指挥官】(探针) 后台初始化成功，兑现 Promise 契约，唤醒前端。');
         _initializationPromiseControls.resolve();
-      } else {
-        logProbe('【指挥官】(探针) 后台初始化成功，已写入缓存。前端尚未建立连接，等待其后续拉取。');
       }
     } catch (error) {
       logProbe(`【指挥官】在初始化主流程中发生严重错误: ${error}`, 'error');
 
+      // 发生错误时，我们需要重置标记，以便下次尝试（如果是临时错误）
+      // 但如果是配置错误，可能重试也没用。这里保持原逻辑，记录错误结果。
       const errorMessage = error instanceof Error ? error.message : String(error);
       _initializationResult = { success: false, error: errorMessage };
 
       if (_initializationPromiseControls) {
         _initializationPromiseControls.reject(errorMessage);
-      } else {
-        logProbe('【指挥官】(探针) 初始化失败，已写入错误缓存。前端尚未建立连接。');
       }
     } finally {
       _initializationPromiseControls = null;
-      logProbe('【初始化指挥官 】协议执行完毕。', 'groupEnd');
+      logProbe('【初始化指挥官】协议执行完毕。', 'groupEnd');
     }
   }
+}
+
+/**
+ * 尝试初始化 (轮询入口)
+ * 职责: 周期性检查世界书数据是否真正就绪。
+ */
+async function tryInitialize() {
+  // 1. 忙碌锁检查 (防止重入)
+  if (_isInitChecking) return;
+  _isInitChecking = true;
+
+  try {
+    // 2. 检查绑定关系 (Sync)
+    const wbNames = getCharWorldbookNames('current');
+
+    if (!wbNames || !wbNames.primary) {
+      stopInitializationTimers(); // 终结：硬性失败
+      logProbe('[Init-Watchman] 失败：未绑定主世界书。', 'error');
+      toastr.error('当前角色卡未绑定主世界书，无法加载音乐配置。', '配置缺失', { timeOut: 15000, closeButton: true });
+      return;
+    }
+
+    // 3. 尝试读取数据 (Async)
+    // 探针: 记录我们正在尝试读取哪本书
+    // logProbe(`[Init-Watchman] 正在检查世界书 "${wbNames.primary}" 的内容...`);
+    const entries = await getWorldbook(wbNames.primary);
+
+    // 4. 数据就绪检查 (Wait Branch)
+    // 如果返回 null 或空数组，视为"加载中"，不做操作，让轮询继续
+    if (!entries || entries.length === 0) {
+      // 保持沉默，等待数据流
+      return;
+    }
+
+    // 5. 配置内容检查 (Config Branch)
+    // 数据已加载，现在检查是否有 [MusicConfig]
+    const configEntry = entries.find(e => e.name.includes('[MusicConfig]'));
+
+    if (!configEntry) {
+      stopInitializationTimers(); // 终结：硬性失败
+      logProbe(`[Init-Watchman] 失败：世界书 "${wbNames.primary}" 中缺失 [MusicConfig]。`, 'error');
+      toastr.error(`主世界书 "${wbNames.primary}" 中未找到 [MusicConfig] 配置条目。`, '配置缺失', {
+        timeOut: 15000,
+        closeButton: true,
+      });
+      return;
+    }
+
+    // 6. 成功分支 (Success)
+    stopInitializationTimers(); // 终结：成功
+    logProbe('[Init-Watchman] 数据完整性验证通过，门卫放行。', 'log');
+
+    // 调用核心业务逻辑
+    await _executeCoreInitialization();
+
+  } catch (e) {
+    stopInitializationTimers(); // 终结：未知异常
+    console.error(e);
+    toastr.error('初始化过程中发生未知错误，请查看控制台。', '脚本错误');
+  } finally {
+    _isInitChecking = false; // 无论如何，释放锁
+  }
+}
+
+/**
+ * 启动观察者模型
+ * 在脚本加载时调用一次。
+ */
+function startObserver() {
+  logProbe('[Init-Launcher] 启动“守夜人”观察者模型...');
+
+  // 1. 启动短轮询 (250ms)
+  _initObserverTimer = setInterval(() => void tryInitialize(), 250) as unknown as number;
+
+  // 2. 启动 10s 兜底超时
+  _initTimeoutTimer = setTimeout(() => {
+    // 只有当 stopInitializationTimers 从未被调用时，才会执行到这里
+    clearInterval(_initObserverTimer as number);
+    _initObserverTimer = null;
+    _isInitChecking = false;
+
+    logProbe('[Init-Launcher] 致命：初始化流程超时 (10s)。', 'error');
+
+    // 向前端和用户报告错误
+    const timeoutMsg = '初始化超时：无法读取到主世界书内容。请确认世界书已加载或尝试刷新页面。';
+    toastr.warning(timeoutMsg, '加载超时', { timeOut: 15000, closeButton: true });
+
+    _initializationResult = { success: false, error: timeoutMsg };
+    if (_initializationPromiseControls) {
+      _initializationPromiseControls.reject(timeoutMsg);
+      _initializationPromiseControls = null;
+    }
+  }, 10000) as unknown as number;
 }
 
 /**
@@ -3502,31 +3614,7 @@ $(() => {
     executeHardReset();
   });
 
-  const observerInterval = setInterval(() => {
-    void tryInitialize();
-    if (isInitializedForThisChat) {
-      clearInterval(observerInterval);
-      logProbe('【观察者模型】初始化成功，观察者已销毁。');
-    }
-  }, 250);
-
-  setTimeout(() => {
-    if (!isInitializedForThisChat) {
-      clearInterval(observerInterval);
-
-      // 这里使用和前端一模一样的中文文案，确保用户体验一致
-      const timeoutMsg = '后台脚本初始化超时。如果这是您第一次加载角色卡，请尝试刷新页面。';
-
-      logProbe(`【观察者模型】初始化超时！`, 'error');
-
-      _initializationResult = { success: false, error: timeoutMsg };
-
-      if (_initializationPromiseControls) {
-        _initializationPromiseControls.reject(timeoutMsg);
-        _initializationPromiseControls = null;
-      }
-    }
-  }, 10000);
+  startObserver();
 
   $(window).on('pagehide', () => {
     logProbe('PAGEHIDE 事件触发！', 'warn');
