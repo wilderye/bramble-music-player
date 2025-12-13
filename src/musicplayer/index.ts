@@ -1312,7 +1312,6 @@ const StrategyManager = (() => {
 
 const STATE_KEY = '余烬双星_播放器状态';
 
-
 let isInitializedForThisChat = false; // 最终成功标记
 let isReconciling = false; // 运行时校准锁
 
@@ -3159,7 +3158,6 @@ async function tryInitialize() {
 
     // 调用核心业务逻辑
     await _executeCoreInitialization();
-
   } catch (e) {
     stopInitializationTimers(); // 终结：未知异常
     console.error(e);
