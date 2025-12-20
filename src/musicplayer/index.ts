@@ -1,4 +1,4 @@
-console.log('音乐播放器脚本9.4.9版本');
+console.log('音乐播放器脚本9.4.10版本');
 
 // =================================================================
 // 0. 诊断工具 (Diagnostic Tools)
@@ -3124,7 +3124,10 @@ async function tryInitialize() {
     if (!wbNames || !wbNames.primary) {
       stopInitializationTimers(); // 终结：硬性失败
       logProbe('[Init-Watchman] 失败：未绑定主世界书。', 'error');
-      toastr.error('当前角色卡未绑定主世界书，请检查世界书或刷新页面。', '配置缺失', { timeOut: 15000, closeButton: true });
+      toastr.error('当前角色卡未绑定主世界书，请检查世界书或刷新页面。', '配置缺失', {
+        timeOut: 15000,
+        closeButton: true,
+      });
       return;
     }
 
@@ -3147,10 +3150,14 @@ async function tryInitialize() {
     if (!configEntry) {
       stopInitializationTimers(); // 终结：硬性失败
       logProbe(`[Init-Watchman] 失败：世界书 "${wbNames.primary}" 中缺失 [MusicConfig]。`, 'error');
-      toastr.error(`主世界书 "${wbNames.primary}" 中未找到 [MusicConfig] 配置条目，请检查配置或刷新页面。`, '配置缺失', {
-        timeOut: 15000,
-        closeButton: true,
-      });
+      toastr.error(
+        `主世界书 "${wbNames.primary}" 中未找到 [MusicConfig] 配置条目，请检查配置或刷新页面。`,
+        '配置缺失',
+        {
+          timeOut: 15000,
+          closeButton: true,
+        },
+      );
       return;
     }
 
@@ -3240,7 +3247,13 @@ function _registerMvuEventListeners() {
   });
 
   // 2. 消息接收监听器
-  eventOn(tavern_events.MESSAGE_RECEIVED, async (id: number) => {
+  eventOn(tavern_events.MESSAGE_RECEIVED, async (rawId: string | number) => {
+    const id = Number(rawId);
+    if (isNaN(id)) {
+      logProbe(`[Event-MVU] 拦截到无效的非数字ID: "${rawId}"，已忽略。`, 'warn');
+      return;
+    }
+
     if (!isScriptActive) return;
     logProbe(`[Event-MVU] 捕获到新消息 (id: ${id})。启动哨兵探测流程...`);
 
@@ -3262,7 +3275,10 @@ function _registerTextEventListeners() {
   logProbe('[EventDispatcher] 正在注册【吟游诗人】文本模式事件监听器...', 'group');
 
   //为 MESSAGE_RECEIVED 事件建立一个原子的“校准-注入”流程。
-  eventOn(tavern_events.MESSAGE_RECEIVED, async (id: number) => {
+  eventOn(tavern_events.MESSAGE_RECEIVED, async (rawId: string | number) => {
+    const id = Number(rawId);
+    if (isNaN(id)) return;
+
     if (!isScriptActive) return;
 
     logProbe(`[Event-Text] 捕获到新消息 (id: ${id})。启动“校准-注入”原子流程...`);
@@ -3276,7 +3292,11 @@ function _registerTextEventListeners() {
   });
 
   // 监听用户编辑消息的逻辑保持不变，它已经遵循了正确的“校准后更新UI”的模式。
-  eventOn(tavern_events.MESSAGE_EDITED, async (id: number) => {
+  eventOn(tavern_events.MESSAGE_EDITED, async (rawId: string | number) => {
+    // [类型防御]
+    const id = Number(rawId);
+    if (isNaN(id)) return;
+
     if (!isScriptActive) return;
     logProbe(`[Event] 文本模式捕获到 MESSAGE_EDITED (id: ${id})，触发校准与UI补救...`);
     await _reconcilePlaylistQueue(undefined);
@@ -3455,29 +3475,28 @@ async function _executeSoftReset(options?: { autoPlayIfWasPlaying?: boolean }) {
 
     // 如果配置解析失败，parseWorldbookConfig 内部会处理报错并返回 null (或抛错)，这里做个防守
     if (!config) {
-        logProbe('[SoftReset] 配置解析失败，软重置中止。', 'error');
-        return;
+      logProbe('[SoftReset] 配置解析失败，软重置中止。', 'error');
+      return;
     }
 
     let authoritativeState = null;
 
     // 2.根据配置模式分流，建立与 _executeCoreInitialization 一致的决策逻辑
     if (config.isMvu) {
-        logProbe('[SoftReset] (MVU模式) 正在为新的开场白查找权威MVU状态...');
-        authoritativeState = await _findLatestAuthoritativeMvuState();
+      logProbe('[SoftReset] (MVU模式) 正在为新的开场白查找权威MVU状态...');
+      authoritativeState = await _findLatestAuthoritativeMvuState();
     } else {
-        logProbe('[SoftReset] (文本模式) 正在为新的开场白解析文本标签...');
-        const textResult = await TextTagManager.getLatestState();
-        // 构造统一的状态结构，与 initializePlayerForChat 接口保持一致
-        authoritativeState = {
-            mvuData: { stat_data: textResult.tags },
-            messageId: textResult.foundAtMessageId,
-        };
+      logProbe('[SoftReset] (文本模式) 正在为新的开场白解析文本标签...');
+      const textResult = await TextTagManager.getLatestState();
+      // 构造统一的状态结构，与 initializePlayerForChat 接口保持一致
+      authoritativeState = {
+        mvuData: { stat_data: textResult.tags },
+        messageId: textResult.foundAtMessageId,
+      };
     }
 
     // 3. 执行特定于该聊天的初始化
     await initializePlayerForChat(config, authoritativeState, options);
-
   } catch (error) {
     logProbe('[SoftReset] 软重置过程中发生严重错误。', 'error');
     console.error(error);
@@ -3524,13 +3543,19 @@ function _registerContextualEventListeners() {
   // 此时脚本内存中还是上一个聊天的状态，因此会错误地将播放器界面注入到新聊天中 (幽灵注入问题)。
   // 我们将在后续阶段使用更精确的事件 (MESSAGE_RECEIVED) 来处理新消息。
 
-  eventOn(tavern_events.MESSAGE_DELETED, (deletedId: number) => {
+  eventOn(tavern_events.MESSAGE_DELETED, (rawDeletedId: string | number) => {
+    const deletedId = Number(rawDeletedId);
+    if (isNaN(deletedId)) return;
+
     if (!isScriptActive) return;
     logProbe(`[EventAdapter] 捕获到删除事件 (原ID: ${deletedId})，正在通过“高级历史通道”触发全量校准...`);
     void _handleHistoryChangeEvent('MESSAGE_DELETED');
   });
 
-  eventOn(tavern_events.MESSAGE_SWIPED, (id: number) => {
+  eventOn(tavern_events.MESSAGE_SWIPED, (rawId: string | number) => {
+    const id = Number(rawId);
+    if (isNaN(id)) return;
+
     if (!isScriptActive) return;
 
     // 原始数据卫士 (Raw Data Guard)
@@ -3549,7 +3574,6 @@ function _registerContextualEventListeners() {
     stopInitializationTimers();
 
     if (id === 0) {
-
       logProbe('[Event-Swipe] 判断为开场白滑动 (用户主动介入)，尝试执行软重置/初始化...');
 
       const wasPlaying = StateManager.isPlaying();
