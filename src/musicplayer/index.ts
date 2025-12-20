@@ -1,4 +1,4 @@
-console.log('音乐播放器脚本9.4.7版本');
+console.log('音乐播放器脚本9.4.9版本');
 
 // =================================================================
 // 0. 诊断工具 (Diagnostic Tools)
@@ -2136,7 +2136,7 @@ async function initializePlayerForChat(
     if (!config) {
       logProbe('[Initializer] 配置无效，初始化中止。', 'error');
       broadcastFullState();
-      throw new Error('世界书音乐配置解析失败，请检查配置。');
+      throw new Error('世界书音乐配置解析失败，请检查配置或刷新页面。');
     }
 
     allPlaylists = config.playlists;
@@ -3055,7 +3055,7 @@ async function _executeCoreInitialization() {
         logProbe('【指挥官】(路径选择) 检测到MVU卡，进入“安全路径”，开始等待MVU就绪...');
         const mvuIsReady = await _waitForMvuGenesis();
         if (!mvuIsReady) {
-          throw new Error('MVU集成初始化失败或超时，部分功能将不可用。');
+          throw new Error('MVU集成初始化失败，请检查MVU脚本是否成功初始化变量，可尝试刷新网页。');
         }
         logProbe('【指挥官】MVU已完全就绪，可以安全继续。');
       } else {
@@ -3088,17 +3088,19 @@ async function _executeCoreInitialization() {
         logProbe('【指挥官】(探针) 后台初始化成功，兑现 Promise 契约，唤醒前端。');
         _initializationPromiseControls.resolve();
       }
+
+      stopInitializationTimers();
     } catch (error) {
       logProbe(`【指挥官】在初始化主流程中发生严重错误: ${error}`, 'error');
 
-      // 发生错误时，我们需要重置标记，以便下次尝试（如果是临时错误）
-      // 但如果是配置错误，可能重试也没用。这里保持原逻辑，记录错误结果。
       const errorMessage = error instanceof Error ? error.message : String(error);
       _initializationResult = { success: false, error: errorMessage };
 
       if (_initializationPromiseControls) {
         _initializationPromiseControls.reject(errorMessage);
       }
+
+      throw error;
     } finally {
       _initializationPromiseControls = null;
       logProbe('【初始化指挥官】协议执行完毕。', 'groupEnd');
@@ -3122,7 +3124,7 @@ async function tryInitialize() {
     if (!wbNames || !wbNames.primary) {
       stopInitializationTimers(); // 终结：硬性失败
       logProbe('[Init-Watchman] 失败：未绑定主世界书。', 'error');
-      toastr.error('当前角色卡未绑定主世界书，无法加载音乐配置。', '配置缺失', { timeOut: 15000, closeButton: true });
+      toastr.error('当前角色卡未绑定主世界书，请检查世界书或刷新页面。', '配置缺失', { timeOut: 15000, closeButton: true });
       return;
     }
 
@@ -3145,7 +3147,7 @@ async function tryInitialize() {
     if (!configEntry) {
       stopInitializationTimers(); // 终结：硬性失败
       logProbe(`[Init-Watchman] 失败：世界书 "${wbNames.primary}" 中缺失 [MusicConfig]。`, 'error');
-      toastr.error(`主世界书 "${wbNames.primary}" 中未找到 [MusicConfig] 配置条目。`, '配置缺失', {
+      toastr.error(`主世界书 "${wbNames.primary}" 中未找到 [MusicConfig] 配置条目，请检查配置或刷新页面。`, '配置缺失', {
         timeOut: 15000,
         closeButton: true,
       });
@@ -3153,15 +3155,12 @@ async function tryInitialize() {
     }
 
     // 6. 成功分支 (Success)
-    stopInitializationTimers(); // 终结：成功
     logProbe('[Init-Watchman] 数据完整性验证通过，门卫放行。', 'log');
 
     // 调用核心业务逻辑
     await _executeCoreInitialization();
   } catch (e) {
-    stopInitializationTimers(); // 终结：未知异常
-    console.error(e);
-    toastr.error('初始化过程中发生未知错误，请查看控制台。', '脚本错误');
+    logProbe(`[Init-Watchman] 轮询中捕获临时异常 (将自动重试): ${e}`, 'warn');
   } finally {
     _isInitChecking = false; // 无论如何，释放锁
   }
@@ -3186,9 +3185,8 @@ function startObserver() {
 
     logProbe('[Init-Launcher] 致命：初始化流程超时 (10s)。', 'error');
 
-    // 向前端和用户报告错误
-    const timeoutMsg = '初始化超时：无法读取到主世界书内容。请确认世界书已加载或尝试刷新页面。';
-    toastr.warning(timeoutMsg, '加载超时', { timeOut: 15000, closeButton: true });
+    const timeoutMsg = '读取角色世界书中的[MusicConfig]失败，请检查世界书或刷新网页。';
+    toastr.error(timeoutMsg, '初始化失败', { timeOut: 0, extendedTimeOut: 0, closeButton: true });
 
     _initializationResult = { success: false, error: timeoutMsg };
     if (_initializationPromiseControls) {
@@ -3452,12 +3450,34 @@ async function _ensureUiVisibility() {
 async function _executeSoftReset(options?: { autoPlayIfWasPlaying?: boolean }) {
   logProbe('[SoftReset] 检测到根本性上下文变更，启动“软重置”协议...', 'warn');
   try {
+    // 1. 解析配置 (这一步会正确推断 isMvu)
     const config = await parseWorldbookConfig();
 
-    logProbe('[SoftReset] 正在为新的开场白查找权威MVU状态...');
-    const authoritativeState = await _findLatestAuthoritativeMvuState();
+    // 如果配置解析失败，parseWorldbookConfig 内部会处理报错并返回 null (或抛错)，这里做个防守
+    if (!config) {
+        logProbe('[SoftReset] 配置解析失败，软重置中止。', 'error');
+        return;
+    }
 
+    let authoritativeState = null;
+
+    // 2.根据配置模式分流，建立与 _executeCoreInitialization 一致的决策逻辑
+    if (config.isMvu) {
+        logProbe('[SoftReset] (MVU模式) 正在为新的开场白查找权威MVU状态...');
+        authoritativeState = await _findLatestAuthoritativeMvuState();
+    } else {
+        logProbe('[SoftReset] (文本模式) 正在为新的开场白解析文本标签...');
+        const textResult = await TextTagManager.getLatestState();
+        // 构造统一的状态结构，与 initializePlayerForChat 接口保持一致
+        authoritativeState = {
+            mvuData: { stat_data: textResult.tags },
+            messageId: textResult.foundAtMessageId,
+        };
+    }
+
+    // 3. 执行特定于该聊天的初始化
     await initializePlayerForChat(config, authoritativeState, options);
+
   } catch (error) {
     logProbe('[SoftReset] 软重置过程中发生严重错误。', 'error');
     console.error(error);
@@ -3465,7 +3485,6 @@ async function _executeSoftReset(options?: { autoPlayIfWasPlaying?: boolean }) {
 }
 
 /**
- * [V9.9 原始数据卫士] (Raw Data Guard)
  * 职责 (Query): 直接穿透封装层，检查酒馆内存中指定消息的内容是否已就绪。
  * 这是区分 "浏览历史" (内容已存在) 和 "触发生成" (内容为空) 的唯一事实来源。
  */
@@ -3500,7 +3519,7 @@ function _isSwipeContentReady(messageId: number): boolean {
 function _registerContextualEventListeners() {
   logProbe('[EventDispatcher] 正在注册“上下文专属”事件监听器...');
 
-  // [V9.6 修复] 移除 CHARACTER_MESSAGE_RENDERED 监听器。
+  // 移除 CHARACTER_MESSAGE_RENDERED 监听器。
   // 它的主要问题是：当切换聊天时，酒馆会重新渲染历史消息，导致此事件被触发。
   // 此时脚本内存中还是上一个聊天的状态，因此会错误地将播放器界面注入到新聊天中 (幽灵注入问题)。
   // 我们将在后续阶段使用更精确的事件 (MESSAGE_RECEIVED) 来处理新消息。
@@ -3526,14 +3545,22 @@ function _registerContextualEventListeners() {
     }
 
     logProbe(`[Event] 捕获到滑动事件 (message_id: ${id})。卫士已放行 (内容已就绪)。`);
-    if (!isCorePlayerInitialized) return;
+
+    stopInitializationTimers();
 
     if (id === 0) {
-      logProbe('[Event-Swipe] 判断为开场白滑动，执行软重置...');
+
+      logProbe('[Event-Swipe] 判断为开场白滑动 (用户主动介入)，尝试执行软重置/初始化...');
+
       const wasPlaying = StateManager.isPlaying();
-      logProbe(`[Event-Swipe] (探针) 软重置前的播放状态: ${wasPlaying}`);
+      logProbe(`[Event-Swipe] (探针) 操作前的播放状态: ${wasPlaying}`);
       void _executeSoftReset({ autoPlayIfWasPlaying: wasPlaying });
     } else {
+      if (!isCorePlayerInitialized) {
+        logProbe('[Event-Swipe] 核心尚未初始化且操作非开场白，忽略本次历史滑动。', 'warn');
+        return;
+      }
+
       logProbe('[Event-Swipe] 判断为历史消息滑动，执行历史变更处理...');
       void _handleHistoryChangeEvent('MESSAGE_SWIPED', { transitionEffect: 'hard' });
     }
