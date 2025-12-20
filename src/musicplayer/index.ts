@@ -3659,7 +3659,7 @@ $(() => {
   setupGlobalAPI();
 
   eventOn(tavern_events.CHAT_CHANGED, () => {
-    logProbe(`[硬重置] CHAT_CHANGED 事件触发，检测到聊天上下文变更。即将执行“优雅停机”协议。`, 'warn');
+    logProbe(`[硬重置] CHAT_CHANGED 事件触发，检测到聊天上下文变更。即将执行"优雅停机"协议。`, 'warn');
     executeHardReset();
   });
 
@@ -3670,5 +3670,18 @@ $(() => {
 
     PlaybackEngine.getActivePlayer()?.pause();
     logProbe('音频已暂停。');
+
+    // 清理全局 API 引用，防止其他角色卡的前端组件连接到"幽灵对象"
+    // 这是同步操作，不受 pagehide 异步限制的影响
+    try {
+      // @ts-expect-error top 是浏览器全局对象
+      if (typeof top !== 'undefined' && top.musicPlayerAPI) {
+        // @ts-expect-error top 是浏览器全局对象
+        delete top.musicPlayerAPI;
+        logProbe('全局 API 引用已清理。');
+      }
+    } catch (e) {
+      logProbe(`清理全局 API 时发生错误: ${e}`, 'warn');
+    }
   });
 });
