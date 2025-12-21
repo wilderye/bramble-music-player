@@ -1,4 +1,4 @@
-console.log('音乐播放器脚本9.4.10版本');
+console.log('音乐播放器脚本9.5版本');
 
 // =================================================================
 // 0. 诊断工具 (Diagnostic Tools)
@@ -1343,6 +1343,13 @@ function stopInitializationTimers() {
   _isInitChecking = false; // 强制释放锁
 }
 let isScriptActive = true;
+
+// [V9.5 新增] 软重置互斥锁，防止 MESSAGE_SWIPED 和轮询监视器同时触发软重置
+let _isSoftResetting = false;
+
+// [V9.5 新增] 开场白轮询监视器的定时器句柄
+let _greetingWatcherTimer: number | null = null;
+
 let allPlaylists: Record<string, PlaylistConfig> = {};
 let triggers: z.infer<typeof ZodTriggerConfig>[] = [];
 let defaultPlaylistId: string | undefined = '';
@@ -2369,6 +2376,17 @@ async function initializePlayerForChat(
         logProbe('[Initializer] 新的开场白未配置歌单，自动播放已取消。');
       }
     }
+
+    // [V9.5 新增] 根据消息数量决定是否启动轮询监视器
+    const chatLength = SillyTavern.chat?.length ?? 0;
+    if (chatLength === 1) {
+      logProbe('[Initializer] 当前处于开场白阶段 (消息数=1)，启动轮询监视器。');
+      _startGreetingWatcher();
+    } else {
+      logProbe(`[Initializer] 当前消息数=${chatLength}，无需启动轮询监视器。`);
+      // 确保没有残留的监视器在运行
+      _stopGreetingWatcher();
+    }
   } catch (error) {
     logProbe(`[Initializer] 核心初始化过程中发生严重错误: ${error}`, 'error');
     console.error(error);
@@ -3016,6 +3034,10 @@ function executeHardReset() {
 
   isScriptActive = false;
 
+  // [V9.5 新增] 停止轮询监视器
+  logProbe('[HardReset] 正在停止轮询监视器...');
+  _stopGreetingWatcher();
+
   PlaybackEngine.getActivePlayer()?.pause();
   logProbe('[HardReset] 音频已暂停。');
 
@@ -3463,11 +3485,98 @@ async function _ensureUiVisibility() {
 }
 
 /**
+ * [V9.5 新增] 启动开场白轮询监视器。
+ *
+ * 职责：定期检查 swipe_id 是否发生变化，以兼容"非标准"的开场白切换方式。
+ *
+ * 生命周期：
+ * - 启动：初始化完成且消息数=1，或 MESSAGE_DELETED 后消息数=1
+ * - 停止：消息数不等于1，或脚本卸载/聊天切换
+ */
+function _startGreetingWatcher() {
+  // 防止重复启动
+  if (_greetingWatcherTimer !== null) {
+    logProbe('[GreetingWatcher] 监视器已在运行中，忽略重复启动请求。');
+    return;
+  }
+
+  logProbe('[GreetingWatcher] 启动开场白轮询监视器 (间隔: 250ms)...');
+
+  _greetingWatcherTimer = window.setInterval(() => {
+    // 前置检查1：脚本是否仍然活跃
+    if (!isScriptActive) {
+      _stopGreetingWatcher();
+      return;
+    }
+
+    // 前置检查2：核心是否已初始化
+    if (!isCorePlayerInitialized) {
+      return; // 还没初始化完成，静默等待
+    }
+
+    // 前置检查3：是否有软重置正在进行
+    if (_isSoftResetting) {
+      return; // 软重置进行中，跳过本轮检测
+    }
+
+    // 检查消息数量
+    const chatLength = SillyTavern.chat?.length ?? 0;
+
+    if (chatLength !== 1) {
+      // 消息数不再是1，说明用户已开始聊天，开场白已固定
+      logProbe(`[GreetingWatcher] 检测到消息数=${chatLength}，开场白阶段结束，停止监视器。`);
+      _stopGreetingWatcher();
+      return;
+    }
+
+    // 获取当前 swipe_id
+    const msgZero = getChatMessages(0, { include_swipes: true })[0];
+    const currentSwipeId = msgZero?.swipe_id ?? 0;
+    const lastSwipeId = StateManager.getLastActiveSwipeId();
+
+    // 对比是否发生变化
+    if (currentSwipeId === lastSwipeId) {
+      return; // 无变化，继续下一轮检测
+    }
+
+    // 检测到变化！
+    logProbe(`[GreetingWatcher] 检测到开场白变化: swipe ${lastSwipeId} -> ${currentSwipeId}`, 'warn');
+
+    // 记录当前播放状态，用于决定软重置后是否自动播放
+    const wasPlaying = StateManager.isPlaying();
+    logProbe(`[GreetingWatcher] 操作前的播放状态: ${wasPlaying}`);
+
+    // 执行软重置
+    void _executeSoftReset({ autoPlayIfWasPlaying: wasPlaying });
+  }, 250); // 250ms 轮询间隔
+}
+
+/**
+ * [V9.5 新增] 停止开场白轮询监视器。
+ *
+ * 此函数可以安全地被多次调用。
+ */
+function _stopGreetingWatcher() {
+  if (_greetingWatcherTimer !== null) {
+    clearInterval(_greetingWatcherTimer);
+    _greetingWatcherTimer = null;
+    logProbe('[GreetingWatcher] 轮询监视器已停止。');
+  }
+}
+
+/**
  * [V9.0 核心] 执行一次“软重置”。
  * 这将在不刷新整个页面的情况下，重新执行完整的初始化流程。
  * 用于响应“开场白滑动”等根本性的上下文变更。
  */
 async function _executeSoftReset(options?: { autoPlayIfWasPlaying?: boolean }) {
+  // [V9.5 新增] 互斥锁检查
+  if (_isSoftResetting) {
+    logProbe('[SoftReset] 请求被合并：已有软重置正在进行中。', 'warn');
+    return;
+  }
+  _isSoftResetting = true;
+
   logProbe('[SoftReset] 检测到根本性上下文变更，启动“软重置”协议...', 'warn');
   try {
     // 1. 解析配置 (这一步会正确推断 isMvu)
@@ -3500,6 +3609,9 @@ async function _executeSoftReset(options?: { autoPlayIfWasPlaying?: boolean }) {
   } catch (error) {
     logProbe('[SoftReset] 软重置过程中发生严重错误。', 'error');
     console.error(error);
+  } finally {
+    // [V9.5 新增] 无论成功失败，都要释放互斥锁
+    _isSoftResetting = false;
   }
 }
 
@@ -3549,7 +3661,14 @@ function _registerContextualEventListeners() {
 
     if (!isScriptActive) return;
     logProbe(`[EventAdapter] 捕获到删除事件 (原ID: ${deletedId})，正在通过“高级历史通道”触发全量校准...`);
-    void _handleHistoryChangeEvent('MESSAGE_DELETED');
+    // [V9.5 修改] 校准完成后检查是否需要重新启动监视器
+    void _handleHistoryChangeEvent('MESSAGE_DELETED').then(() => {
+      const chatLength = SillyTavern.chat?.length ?? 0;
+      if (chatLength === 1) {
+        logProbe('[EventAdapter] 删除后消息数=1，重新启动轮询监视器。');
+        _startGreetingWatcher();
+      }
+    });
   });
 
   eventOn(tavern_events.MESSAGE_SWIPED, (rawId: string | number) => {
@@ -3667,6 +3786,10 @@ $(() => {
 
   $(window).on('pagehide', () => {
     logProbe('PAGEHIDE 事件触发！', 'warn');
+
+    // [V9.5 新增] 停止轮询监视器
+    logProbe('[Pagehide] 正在停止轮询监视器...');
+    _stopGreetingWatcher();
 
     PlaybackEngine.getActivePlayer()?.pause();
     logProbe('音频已暂停。');
