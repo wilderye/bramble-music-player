@@ -391,7 +391,7 @@ function parse_configuration(entry: Entry): (_env: any, argv: any) => webpack.Co
               terserOptions: {
                 // [新增] compress 选项用于代码压缩和移除无效代码
                 compress: {
-                  drop_console: true, // 移除所有 console.* 调用 (log, warn, error 等)
+                  drop_console: false, // [V9.5.1] 保留 console 输出用于生产调试
                   pure_funcs: ['logProbe'], // 将 logProbe 函数标记为“纯函数”
                 },
                 // [新增] format 选项用于控制输出格式

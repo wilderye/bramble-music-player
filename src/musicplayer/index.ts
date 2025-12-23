@@ -1,4 +1,4 @@
-console.log('音乐播放器脚本9.5版本');
+console.log('黑棘v9.5.1');
 
 // =================================================================
 // 0. 诊断工具 (Diagnostic Tools)
@@ -2161,12 +2161,17 @@ async function initializePlayerForChat(
     // --- 【第一步】 确定并验证权威的基础歌单 ID ---
     let correctBasePlaylistId = defaultPlaylistId;
 
-    const msgZero = getChatMessages(0, { include_swipes: true })[0];
+    // [V9.5.1] 优化：直接访问原生内存，绕过 getChatMessages 可能的缓存
+    const msgZero = SillyTavern.chat?.[0];
     const currentSwipeId = msgZero?.swipe_id ?? 0;
 
     if (msgZero) {
-      const currentGreeting = msgZero.swipes?.[msgZero.swipe_id];
+      // 优先从 swipes 数组获取，如果没有则回退到 mes
+      const currentGreeting = msgZero.swipes?.[currentSwipeId] ?? msgZero.mes;
       const tagMatch = currentGreeting?.match(/<playlist:([^>]+)>/);
+      console.info(
+        `[Init-Debug] 开场白解析: ID=${currentSwipeId}, 内容预览="${currentGreeting?.substring(0, 50)}...", 标签匹配=${tagMatch ? tagMatch[1] : '无'}`,
+      );
       if (tagMatch && tagMatch[1]) {
         const tagPlaylistId = tagMatch[1];
         if (allPlaylists[tagPlaylistId]) {
@@ -2181,6 +2186,7 @@ async function initializePlayerForChat(
         logProbe(`[Initializer-Heal] (基准) 开场白无标签，使用世界书默认歌单: "${defaultPlaylistId ?? '无'}"`);
       }
     }
+    console.info(`[Init-Debug] 最终决定的 BasePlaylistId: "${correctBasePlaylistId}"`);
 
     const lastSwipeId = StateManager.getLastActiveSwipeId();
 
@@ -2329,6 +2335,7 @@ async function initializePlayerForChat(
 
     // --- 【第五步】 最终加载与后续设置 ---
     logProbe('[Initializer-Finalize] 正在提交最终队列并完成设置...');
+    console.info(`[Init-Debug] 最终队列长度: ${finalQueue.length}`);
     StateManager.updateQueue(finalQueue);
 
     // 注意：如果 resetState 重置了模式，我们需要从 savedState 恢复，或者使用默认
@@ -3059,6 +3066,18 @@ async function _executeCoreInitialization() {
 
     logProbe(`【指挥官】锁定ID: ${_currentChatId}，门卫已放行，开始执行核心初始化业务...`, 'group');
 
+    // ======== 【V9.5.1 新增】步骤 0：拍摄开场白快照 ========
+    // 在一切异步操作开始前，记录当前的 swipe_id，用于检测初始化期间是否发生跳转
+    const chatLengthSnapshot = SillyTavern.chat.length;
+    let snapshotSwipeId: number | null = null;
+
+    if (chatLengthSnapshot === 1) {
+      const msgZeroSnapshot = SillyTavern.chat?.[0];
+      snapshotSwipeId = msgZeroSnapshot?.swipe_id ?? 0;
+      console.info(`[Init] 建立开场白快照锚点: swipe_id=${snapshotSwipeId}`);
+    }
+    // ======================================================
+
     try {
       // --- 步骤一：解析配置 (Detect) ---
       // 此时 parseWorldbookConfig 应该能 100% 成功，因为门卫已经确认了数据存在
@@ -3100,6 +3119,24 @@ async function _executeCoreInitialization() {
       }
 
       await initializePlayerForChat(config, authoritativeState);
+
+      // ======== 【V9.5.1 新增】步骤 3.5：对比快照与纠偏 ========
+      // 初始化完成后，立即检查 swipe_id 是否在异步期间发生了变化
+      if (snapshotSwipeId !== null) {
+        const currentMsgZero = SillyTavern.chat?.[0];
+        const currentSwipeId = currentMsgZero?.swipe_id ?? 0;
+        console.info(`[Init] 初始化完成后检查: 当前 swipe_id=${currentSwipeId}, 快照 swipe_id=${snapshotSwipeId}`);
+
+        if (snapshotSwipeId !== currentSwipeId) {
+          console.warn(`[Init] ⚠️ 竞态警告: 初始化期间开场白漂移 (${snapshotSwipeId} -> ${currentSwipeId})`);
+          console.info(`[Init] 正在执行同步纠偏 (软重置)...`);
+
+          await _executeSoftReset({ autoPlayIfWasPlaying: false });
+
+          console.info(`[Init] 纠偏完成，继续执行标准流程。`);
+        }
+      }
+      // ========================================================
 
       _registerContextualEventListeners();
       await _ensureUiVisibility();
@@ -3501,6 +3538,9 @@ function _startGreetingWatcher() {
   }
 
   logProbe('[GreetingWatcher] 启动开场白轮询监视器 (间隔: 250ms)...');
+
+  const initialSwipeId = StateManager.getLastActiveSwipeId();
+  console.info(`[Watcher-Debug] 启动监视器: initialSwipeId=${initialSwipeId}`);
 
   _greetingWatcherTimer = window.setInterval(() => {
     // 前置检查1：脚本是否仍然活跃
