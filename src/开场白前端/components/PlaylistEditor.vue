@@ -174,7 +174,7 @@
                     <input
                       v-model="cond.path"
                       type="text"
-                      placeholder="变量路径"
+                      placeholder="如`角色.好感度`"
                       class="min-w-[140px] flex-1 appearance-none rounded-xl bg-stone-50 px-4 py-3 text-base text-stone-800 outline-none placeholder:text-stone-400 focus:bg-white focus:ring-2 focus:ring-[#5C7F67]/30 dark:bg-stone-800 dark:text-stone-200"
                     />
 
@@ -201,7 +201,7 @@
                     <input
                       v-model="cond.value"
                       type="text"
-                      placeholder="值"
+                      placeholder="值，如`20`"
                       class="min-w-[100px] flex-1 appearance-none rounded-xl bg-stone-50 px-4 py-3 text-base text-stone-800 outline-none placeholder:text-stone-400 focus:bg-white focus:ring-2 focus:ring-[#5C7F67]/30 dark:bg-stone-800 dark:text-stone-200"
                     />
 
@@ -241,7 +241,7 @@
                     type="number"
                     class="w-28 appearance-none rounded-2xl bg-white px-4 py-3 text-center text-lg font-bold text-stone-800 shadow-sm transition-all outline-none focus:ring-2 focus:ring-[#5C7F67]/30 dark:bg-stone-900 dark:text-stone-100"
                   />
-                  <span class="text-base text-stone-500"> 场景歌单的优先级。数字越大，优先级越高。 </span>
+                  <span class="text-base text-stone-500"> 场景歌单的优先级。多个场景歌单满足条件时，播放优先级最高的歌曲。数字越大，优先级越高。 </span>
                 </div>
               </div>
 
