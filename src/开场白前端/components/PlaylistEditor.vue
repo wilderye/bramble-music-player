@@ -241,7 +241,9 @@
                     type="number"
                     class="w-28 appearance-none rounded-2xl bg-white px-4 py-3 text-center text-lg font-bold text-stone-800 shadow-sm transition-all outline-none focus:ring-2 focus:ring-[#5C7F67]/30 dark:bg-stone-900 dark:text-stone-100"
                   />
-                  <span class="text-base text-stone-500"> 场景歌单的优先级。多个场景歌单满足条件时，播放优先级最高的歌曲。数字越大，优先级越高。 </span>
+                  <span class="text-base text-stone-500">
+                    场景歌单的优先级。多个场景歌单满足条件时，播放优先级最高的歌曲。数字越大，优先级越高。
+                  </span>
                 </div>
               </div>
 
