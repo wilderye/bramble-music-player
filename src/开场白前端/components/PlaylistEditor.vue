@@ -139,7 +139,7 @@
               <!-- 优先级 -->
               <div>
                 <label class="mb-3 block text-base font-bold text-stone-700 dark:text-stone-300"> 优先级 </label>
-                <div class="flex items-center gap-4">
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
                   <input
                     v-model.number="playlist.mvuConfig.priority"
                     type="number"
@@ -235,7 +235,7 @@
             <div v-else class="space-y-6">
               <div>
                 <label class="mb-3 block text-lg font-bold text-stone-700 dark:text-stone-200"> 优先级 </label>
-                <div class="flex items-center gap-4">
+                <div class="flex flex-col gap-2 sm:flex-row sm:items-center sm:gap-4">
                   <input
                     v-model.number="playlist.textConfig.priority"
                     type="number"
