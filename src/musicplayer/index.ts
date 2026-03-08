@@ -165,6 +165,7 @@ export const ZodWorldbookConfig = z
     playlists: z.array(ZodPlaylistConfig).optional(),
     triggers: z.array(ZodTriggerConfig).optional(),
     is_mvu: z.boolean().optional(),
+    hide_player: z.boolean().optional(),
   })
   .strict();
 
@@ -1357,6 +1358,7 @@ let defaultPlaylistId: string | undefined = '';
 let isMvuIntegrationActive = false;
 let isCorePlayerInitialized = false;
 let isMvuMode = true;
+let _isPlayerHidden = false;
 let _currentChatId: string | number | null = null;
 
 const fullStateUpdateCallbacks: ((payload: FullStatePayload) => void)[] = [];
@@ -1827,12 +1829,14 @@ async function parseWorldbookConfig() {
     defaultPlaylistId?: string;
     _defaultPlaylistIdSourceFile: string | null;
     explicitMvuMode?: boolean;
+    isPlayerHidden: boolean;
   } = {
     playlists: [],
     triggers: [],
     defaultPlaylistId: undefined,
     _defaultPlaylistIdSourceFile: null,
     explicitMvuMode: undefined,
+    isPlayerHidden: false,
   };
 
   try {
@@ -1888,6 +1892,10 @@ async function parseWorldbookConfig() {
           if (data.is_mvu !== undefined) {
             aggregatedConfig.explicitMvuMode = data.is_mvu;
             logProbe(`[Parser V9.5] (配置) 在文件 "${entry.name}" 中读取到显式模式设置: is_mvu = ${data.is_mvu}`);
+          }
+          if (data.hide_player === true) {
+            aggregatedConfig.isPlayerHidden = true;
+            logProbe(`[Parser] 在文件 "${entry.name}" 中检测到 hide_player: true，标签注入已禁用。`);
           }
         } catch (e: any) {
           logProbe(`[Parser V4] 解析条目 "${entry.name}" 时发生YAML语法错误: ${e.message}`, 'error');
@@ -2007,6 +2015,7 @@ async function parseWorldbookConfig() {
       defaultId: aggregatedConfig.defaultPlaylistId,
       triggers: finalTriggers.map(t => _.omit(t, '_sourceFile')),
       isMvu: finalIsMvu,
+      hidePlayer: aggregatedConfig.isPlayerHidden,
     };
 
     logProbe('[Parser V4] 数据归一化完成，运行时配置已就绪。', 'log');
@@ -3089,7 +3098,8 @@ async function _executeCoreInitialization() {
       }
 
       const isMvuCard = config.isMvu;
-      logProbe(`(探针-决策) 作者意图判断 -> 是MVU卡吗? ${isMvuCard}`);
+      _isPlayerHidden = config.hidePlayer || false;
+      logProbe(`(探针-决策) 作者意图判断 -> 是MVU卡吗? ${isMvuCard}, 隐藏播放器? ${_isPlayerHidden}`);
 
       // --- 步骤二：分流 (Branch) & 等待 (Wait) ---
       if (isMvuCard) {
@@ -3395,6 +3405,7 @@ async function _handleHistoryChangeEvent(eventName: string, options?: { transiti
  * @param messageId - 由事件传来的消息ID。
  */
 async function _handleNewAssistantMessage(messageId: number): Promise<void> {
+  if (_isPlayerHidden) return;
   logProbe(`[Injector] 收到 UI 注入请求，目标 message_id: ${messageId}`);
 
   if (messageId === 0) {
@@ -3432,6 +3443,7 @@ async function _handleNewAssistantMessage(messageId: number): Promise<void> {
  * 原则：SSoT (以队列状态为准), 鲁棒性 (补救缺失的 UI)
  */
 async function _ensureUiVisibility() {
+  if (_isPlayerHidden) return;
   logProbe('[UiGuard] 正在检查界面一致性 (高性能局部扫描)...', 'groupCollapsed');
 
   const topQueueItem = StateManager.getTopQueueItem();
@@ -3627,6 +3639,8 @@ async function _executeSoftReset(options?: { autoPlayIfWasPlaying?: boolean }) {
       logProbe('[SoftReset] 配置解析失败，软重置中止。', 'error');
       return;
     }
+
+    _isPlayerHidden = config.hidePlayer || false;
 
     let authoritativeState = null;
 
