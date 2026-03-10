@@ -11,6 +11,9 @@ pnpm-debug.log*
 
 auto-imports.d.ts
 components.d.ts
+<<<<<<< HEAD
 
 .agents
 
+=======
+>>>>>>> da0118dfd92c2c94f015b40b73e9666c996c3fe8
