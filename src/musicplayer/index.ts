@@ -1,4 +1,4 @@
-console.log('黑棘v9.5.1');
+console.log('黑棘v9.5.2');
 
 // =================================================================
 // 0. 诊断工具 (Diagnostic Tools)
@@ -3045,6 +3045,32 @@ function setupGlobalAPI() {
 // 9. 酒馆集成与主执行区 (Tavern Integration & Main Execution)
 // =================================================================
 
+/**
+ * [Query · CQS] 检查当前全局 chatId 是否与本实例初始化时记录的值不一致。
+ * 不一致说明聊天已切换或被重命名，本实例已过期，所有事件处理应被跳过。
+ * 纯查询函数，无副作用。
+ */
+function _isChatStale(): boolean {
+  if (!_currentChatId) return false; // 尚未初始化，不做判断
+  const globalChatId = SillyTavern.chatId;
+  return globalChatId !== null && globalChatId !== undefined && globalChatId !== _currentChatId;
+}
+
+/**
+ * [Decorator · OCP] 带 chatId 守卫的事件注册器。
+ * 在原始 handler 执行前检查 chatId 是否过期，过期则拒绝处理。
+ * 用法：将需要守卫的 eventOn(...) 替换为 guardedEventOn(...)。
+ */
+function guardedEventOn(eventName: string, handler: (...args: any[]) => void | Promise<void>) {
+  eventOn(eventName, async (...args: any[]) => {
+    if (_isChatStale()) {
+      logProbe(`[Guard] chatId 已变更，旧实例拒绝处理 ${eventName}。`, 'warn');
+      return;
+    }
+    return handler(...args);
+  });
+}
+
 function executeHardReset() {
   logProbe('[HardReset] “优雅停机”协议启动...', 'warn');
 
@@ -3068,7 +3094,7 @@ async function _executeCoreInitialization() {
   // 再次检查防止重复执行 (双重保险)
   if (isInitializedForThisChat) return;
 
-  const currentChatId = SillyTavern.getCurrentChatId ? SillyTavern.getCurrentChatId() : null;
+  const currentChatId = SillyTavern.chatId ?? null;
   if (SillyTavern.chat.length > 0 && currentChatId !== null) {
     isInitializedForThisChat = true;
     _currentChatId = currentChatId;
@@ -3302,7 +3328,7 @@ function _registerMvuEventListeners() {
   logProbe('[EventDispatcher] 正在注册【运行时】MVU 事件监听器 (哨兵模式 V3)...', 'group');
 
   // 1. 变量更新监听器 (负责核心校准 + 覆写补救)
-  eventOn(Mvu.events.VARIABLE_UPDATE_ENDED, async (eventPayload?: any) => {
+  guardedEventOn(Mvu.events.VARIABLE_UPDATE_ENDED, async (eventPayload?: any) => {
     if (!isMvuIntegrationActive || !isCorePlayerInitialized) return;
 
     logProbe(`[Event-MVU] 捕获到变量更新事件 (Payload: ${eventPayload ? '有' : '无'})。`);
@@ -3316,7 +3342,7 @@ function _registerMvuEventListeners() {
   });
 
   // 2. 消息接收监听器
-  eventOn(tavern_events.MESSAGE_RECEIVED, async (rawId: string | number) => {
+  guardedEventOn(tavern_events.MESSAGE_RECEIVED, async (rawId: string | number) => {
     const id = Number(rawId);
     if (isNaN(id)) {
       logProbe(`[Event-MVU] 拦截到无效的非数字ID: "${rawId}"，已忽略。`, 'warn');
@@ -3344,7 +3370,7 @@ function _registerTextEventListeners() {
   logProbe('[EventDispatcher] 正在注册【吟游诗人】文本模式事件监听器...', 'group');
 
   //为 MESSAGE_RECEIVED 事件建立一个原子的“校准-注入”流程。
-  eventOn(tavern_events.MESSAGE_RECEIVED, async (rawId: string | number) => {
+  guardedEventOn(tavern_events.MESSAGE_RECEIVED, async (rawId: string | number) => {
     const id = Number(rawId);
     if (isNaN(id)) return;
 
@@ -3361,7 +3387,7 @@ function _registerTextEventListeners() {
   });
 
   // 监听用户编辑消息的逻辑保持不变，它已经遵循了正确的“校准后更新UI”的模式。
-  eventOn(tavern_events.MESSAGE_EDITED, async (rawId: string | number) => {
+  guardedEventOn(tavern_events.MESSAGE_EDITED, async (rawId: string | number) => {
     // [类型防御]
     const id = Number(rawId);
     if (isNaN(id)) return;
@@ -3709,7 +3735,7 @@ function _registerContextualEventListeners() {
   // 此时脚本内存中还是上一个聊天的状态，因此会错误地将播放器界面注入到新聊天中 (幽灵注入问题)。
   // 我们将在后续阶段使用更精确的事件 (MESSAGE_RECEIVED) 来处理新消息。
 
-  eventOn(tavern_events.MESSAGE_DELETED, (rawDeletedId: string | number) => {
+  guardedEventOn(tavern_events.MESSAGE_DELETED, (rawDeletedId: string | number) => {
     const deletedId = Number(rawDeletedId);
     if (isNaN(deletedId)) return;
 
@@ -3725,7 +3751,7 @@ function _registerContextualEventListeners() {
     });
   });
 
-  eventOn(tavern_events.MESSAGE_SWIPED, (rawId: string | number) => {
+  guardedEventOn(tavern_events.MESSAGE_SWIPED, (rawId: string | number) => {
     const id = Number(rawId);
     if (isNaN(id)) return;
 
