@@ -1410,9 +1410,9 @@ async function _reconcilePlaylistQueue(eventPayload?: any, options?: { transitio
             currentStateData = authState.mvuData?.stat_data ?? {};
             logProbe('[Reconciler] (事实) 主动查询并采用了最新的 MVU 状态。');
           } else {
-            // 如果真的找不到任何数据（极罕见），默认为空状态，这意味着触发器可能全部失效
-            logProbe('[Reconciler] (事实) 未找到有效的 MVU 状态，将使用空状态进行校准。', 'warn');
-            currentStateData = {};
+            // SSoT: "查不到数据" ≠ "数据为空"。没有事实依据时，拒绝做出判断。
+            logProbe('[Reconciler] (SSoT) 未找到有效的 MVU 状态，拒绝在无事实依据下校准。本轮跳过。', 'warn');
+            return;
           }
         }
       } else {
