@@ -11,8 +11,11 @@ pnpm-debug.log*
 
 auto-imports.d.ts
 components.d.ts
+<<<<<<< HEAD
 
 .agents
 
 MagVarUpdate-beta/
 控制台日志.txt
+=======
+>>>>>>> c27dc311feeca88f575184c70cd539091ffeaf47
