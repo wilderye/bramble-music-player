@@ -1,13 +1,15 @@
 declare namespace Mvu {
   type MvuData = {
     /** 已被 mvu 初始化 initvar 条目的世界书列表 */
-    initialized_lorebooks: string[];
+    initialized_lorebooks: Record<string, any[]>;
 
     /** 实际的变量数据 */
     stat_data: Record<string, any>;
+
+    [key: string]: any;
   };
 
-  type CommandInfo = SetCommandInfo | InsertCommandInfo | DeleteCommandInfo | AddCommandInfo;
+  type CommandInfo = SetCommandInfo | InsertCommandInfo | DeleteCommandInfo | AddCommandInfo | MoveCommandInfo;
   type SetCommandInfo = {
     type: 'set';
     full_match: string;
@@ -36,6 +38,12 @@ declare namespace Mvu {
     args: [path: string, delta_or_toggle_literal: string];
     reason: string;
   };
+  type MoveCommandInfo = {
+    type: 'move';
+    full_match: string;
+    args: [from: string, to: string];
+    reason: string;
+  };
 }
 
 /**
@@ -56,7 +64,7 @@ declare const Mvu: {
      *
      * @example
      * // 修复 gemini 在中文间加入的 '-'', 如将 '角色.络-络' 修复为 '角色.络络'
-     * eventOn(Mvu.events.COMMAND_PARSED, commands => {
+     * eventOn(Mvu.events.COMMAND_PARSED, (_variables, commands) => {
      *   commands.forEach(command => {
      *     command.args[0] = command.args[0].replace(/-/g, '');
      *   });
@@ -64,7 +72,7 @@ declare const Mvu: {
      *
      * @example
      * // 修复繁体字, 如将 '絡絡' 修复为 '络络'
-     * eventOn(Mvu.events.COMMAND_PARSED, commands => {
+     * eventOn(Mvu.events.COMMAND_PARSED, (_variables, commands) => {
      *   commands.forEach(command => {
      *     command.args[0] = command.args[0].replaceAll('絡絡', '络络');
      *   });
@@ -72,11 +80,11 @@ declare const Mvu: {
      *
      * @example
      * // 添加新的更新命令
-     * eventOn(Mvu.events.COMMAND_PARSED, commands => {
+     * eventOn(Mvu.events.COMMAND_PARSED, (_variables, commands) => {
      *   commands.push({
      *     type: 'set',
-     *     full_match: `_.set('络络.好感度', 5)`,
-     *     args: ['络络.好感度', 5],
+     *     full_match: `_.set('络络.好感度', '5')`,
+     *     args: ['络络.好感度', '5'],
      *     reason: '脚本强行更新',
      *   });
      * });
@@ -130,7 +138,7 @@ declare const Mvu: {
   getMvuData: (options: VariableOption) => Mvu.MvuData;
 
   /**
-   * 完全替换变量表为包含 mvu 数据的 `mvu_data` (但如果没用 parseMessages 自行处理变量, 则更建议监听 mvu 事件来修改 mvu 数据!)
+   * 完全替换变量表为包含 mvu 数据的 `mvu_data` (但如果没用 `parseMessages` 自行处理变量, 则更建议监听 mvu 事件来修改 mvu 数据!)
    *
    * @param variables 要用于替换的变量表
    * @param option 可选选项
@@ -163,23 +171,19 @@ declare const Mvu: {
   parseMessage: (message: string, old_data: Mvu.MvuData) => Promise<Mvu.MvuData>;
 
   /**
-   * 重新加载初始变量数据
-   *
-   * @param mvu_data 要重新加载初始数据的 MvuData 数据表
-   *
-   * @returns 是否加载成功
+   * 酒馆是否正在进行额外模型解析
    */
-  reloadInitVar: (mvu_data: Mvu.MvuData) => Promise<boolean>;
+  isDuringExtraAnalysis: () => boolean;
 };
 
 interface ListenerType {
   [Mvu.events.VARIABLE_INITIALIZED]: (variables: Mvu.MvuData, swipe_id: number) => void;
-
-  [Mvu.events.BEFORE_MESSAGE_UPDATE]: (context: { variables: Mvu.MvuData; message_content: string }) => void;
 
   [Mvu.events.VARIABLE_UPDATE_STARTED]: (variables: Mvu.MvuData) => void;
 
   [Mvu.events.COMMAND_PARSED]: (variables: Mvu.MvuData, commands: Mvu.CommandInfo[], message_content: string) => void;
 
   [Mvu.events.VARIABLE_UPDATE_ENDED]: (variables: Mvu.MvuData, variables_before_update: Mvu.MvuData) => void;
+
+  [Mvu.events.BEFORE_MESSAGE_UPDATE]: (context: { variables: Mvu.MvuData; message_content: string }) => void;
 }
